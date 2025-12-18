@@ -14,7 +14,7 @@ jobs:
 
       - name: Verify required root files
         run: |
-          REQUIRED_FILES=(README.md LICENSE requirements.txt requirement.txt project_launcher.py projectlauncher.py run_app.bat runapp.bat .env.example .env)
+          REQUIRED_FILES=(README.md LICENSE requirements.txt project_launcher.py run_app.bat .env.example .env)
 
           for file in "${REQUIRED_FILES[@]}"; do
             if [ ! -f "$file" ]; then
