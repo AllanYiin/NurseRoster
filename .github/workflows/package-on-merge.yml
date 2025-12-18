@@ -1,0 +1,48 @@
+name: Package Merge Artifact
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  bundle:
+    name: Bundle repository after merge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify required top-level files
+        run: |
+          for file in README.md requirements.txt project_launcher.py run_app.bat; do
+            if [ ! -f "$file" ]; then
+              echo "Missing required file: $file" >&2
+              exit 1
+            fi
+          done
+
+      - name: Prepare bundle directory
+        run: |
+          BUNDLE_DIR="artifacts/nurse-roster-${GITHUB_SHA::7}"
+          mkdir -p "$BUNDLE_DIR"
+          echo "BUNDLE_DIR=$BUNDLE_DIR" >> "$GITHUB_ENV"
+          rsync -a ./ "$BUNDLE_DIR"/ \
+            --exclude ".git" \
+            --exclude "artifacts" \
+            --exclude "*.pyc" --exclude "__pycache__" \
+            --exclude ".pytest_cache" \
+            --exclude ".venv" --exclude "venv" \
+            --exclude "dist" --exclude "build" \
+            --exclude "node_modules"
+
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nurse-roster-merge-bundle-${{ github.sha }}
+          path: ${{ env.BUNDLE_DIR }}
+          retention-days: 30
