@@ -1,0 +1,28 @@
+name: Project Launcher Validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  run-launcher:
+    name: Run project_launcher.py
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Execute project launcher
+        run: |
+          python project_launcher.py --root . --venv .venv-ci
+
+      - name: Clean up launcher virtual environment
+        if: always()
+        run: rm -rf .venv-ci
