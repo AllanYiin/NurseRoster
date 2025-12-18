@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import logging
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from datetime import datetime
+from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.api.deps import db_session
-from app.models.entities import Rule
+from app.db.session import get_session
+from app.models.entities import Rule, RuleVersion, ValidationStatus
 from app.schemas.common import ok
-from app.services.rules import stream_nl_to_dsl, dsl_to_nl, validate_dsl, stream_nl_to_dsl_events
+from app.services.rules import sse_event, stream_nl_to_dsl, dsl_to_nl, validate_dsl, stream_nl_to_dsl_events
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 logger = logging.getLogger(__name__)
@@ -20,6 +24,30 @@ class RuleUpsert(BaseModel):
     nl_text: str = ""
     dsl_text: str = ""
     is_enabled: bool = True
+
+
+class RuleVersionFromDsl(BaseModel):
+    dsl_text: str
+    nl_text: str = ""
+    reverse_translation: str | None = None
+
+
+def _ensure_rule(session: Session, rule_id: int) -> Rule:
+    rule = session.get(Rule, rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="找不到規則")
+    return rule
+
+
+def _next_version(session: Session, rule_id: int) -> int:
+    latest = session.exec(
+        select(RuleVersion.version).where(RuleVersion.rule_id == rule_id).order_by(RuleVersion.version.desc())
+    ).first()
+    return int(latest or 0) + 1
+
+
+def _validation_status(result: dict) -> ValidationStatus:
+    return ValidationStatus.PASS if result.get("ok") else ValidationStatus.FAIL
 
 
 @router.get("", response_model=None)
@@ -62,8 +90,73 @@ def delete_rule(rule_id: int, s: Session = Depends(db_session)):
     return ok(True)
 
 
+@router.get("/{rule_id}/versions")
+def list_rule_versions(rule_id: int, s: Session = Depends(db_session)):
+    _ensure_rule(s, rule_id)
+    rows = s.exec(select(RuleVersion).where(RuleVersion.rule_id == rule_id).order_by(RuleVersion.version.desc())).all()
+    return ok([r.model_dump() for r in rows])
+
+
+@router.post("/{rule_id}/versions:from_dsl")
+def create_rule_version_from_dsl(rule_id: int, payload: RuleVersionFromDsl, s: Session = Depends(db_session)):
+    _ensure_rule(s, rule_id)
+    version = _next_version(s, rule_id)
+    validation = validate_dsl(payload.dsl_text)
+    status = _validation_status(validation)
+    rv = RuleVersion(
+        rule_id=rule_id,
+        version=version,
+        nl_text=payload.nl_text,
+        dsl_text=payload.dsl_text,
+        reverse_translation=payload.reverse_translation or dsl_to_nl(payload.dsl_text),
+        validation_status=status,
+        validation_report=validation,
+    )
+    s.add(rv)
+    s.commit()
+    s.refresh(rv)
+    return ok(rv.model_dump())
+
+
 class NLReq(BaseModel):
     text: str
+
+
+@router.post("/{rule_id}/versions:from_nl")
+def create_rule_version_from_nl(rule_id: int, payload: NLReq):
+    def _stream():
+        collected: List[str] = []
+        final_text = ""
+        for event, chunk in stream_nl_to_dsl_events(payload.text):
+            if event == "token":
+                collected.append(chunk.get("text", ""))
+            if event == "completed":
+                final_text = chunk.get("dsl_text", final_text)
+            yield sse_event(event, chunk)
+
+        dsl_text = final_text or "".join(collected)
+        if not dsl_text:
+            return
+        with get_session() as session:
+            rule = session.get(Rule, rule_id)
+            if not rule:
+                return
+            version = _next_version(session, rule_id)
+            validation = validate_dsl(dsl_text)
+            status = _validation_status(validation)
+            rv = RuleVersion(
+                rule_id=rule_id,
+                version=version,
+                nl_text=payload.text,
+                dsl_text=dsl_text,
+                reverse_translation=dsl_to_nl(dsl_text),
+                validation_status=status,
+                validation_report=validation,
+            )
+            session.add(rv)
+            session.commit()
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
 @router.get("/nl_to_dsl_stream")
@@ -97,6 +190,26 @@ def api_dsl_to_nl(payload: dict):
     return ok({"text": dsl_to_nl(payload.get("dsl_text", ""))})
 
 
+@router.get("/dsl/reverse_translate")
+def reverse_translate(dsl_text: str):
+    return ok({"text": dsl_to_nl(dsl_text)})
+
+
 @router.post("/validate")
 def api_validate(payload: dict):
     return ok(validate_dsl(payload.get("dsl_text", "")))
+
+
+@router.post("/{rule_id}/activate/{version_id}")
+def activate_rule_version(rule_id: int, version_id: int, s: Session = Depends(db_session)):
+    rule = _ensure_rule(s, rule_id)
+    version = s.get(RuleVersion, version_id)
+    if not version or version.rule_id != rule_id:
+        raise HTTPException(status_code=404, detail="找不到規則版本")
+    rule.dsl_text = version.dsl_text
+    rule.nl_text = version.nl_text
+    rule.updated_at = datetime.utcnow()
+    s.add(rule)
+    s.commit()
+    s.refresh(rule)
+    return ok(rule.model_dump())

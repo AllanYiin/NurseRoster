@@ -14,8 +14,10 @@ from app.services.seed import seed_if_empty
 from app.api.masterdata import router as master_router
 from app.api.calendar import router as calendar_router
 from app.api.rules import router as rules_router
+from app.api.schedule import router as schedule_router
 from app.api.optimization import router as opt_router
 from app.api.projects import router as projects_router
+from app.api.dsl import router as dsl_router
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +50,10 @@ def create_app() -> FastAPI:
     app.include_router(projects_router)
     app.include_router(master_router)
     app.include_router(calendar_router)
+    app.include_router(schedule_router)
     app.include_router(rules_router)
     app.include_router(opt_router)
+    app.include_router(dsl_router)
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
