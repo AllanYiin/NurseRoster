@@ -109,9 +109,11 @@ def run_cmd(cmd: List[str], cwd: Optional[Path] = None) -> Tuple[int, str]:
 def read_text(p: Path) -> str:
     return p.read_text(encoding="utf-8", errors="ignore")
 
-def write_text_ansi(p: Path, text: str) -> None:
-    enc = "mbcs" if is_windows() else "cp1252"
-    p.write_text(text, encoding=enc, errors="strict")
+def write_text_utf8_bom(p: Path, text: str) -> None:
+    # Use UTF-8 with BOM for maximum compatibility with Windows cmd.exe/bat files.
+    # newline is forced to CRLF to avoid edge cases in some Windows environments.
+    p.write_text(text, encoding="utf-8-sig", newline="
+")
 
 def safe_int(s: str) -> Optional[int]:
     try:
@@ -660,7 +662,7 @@ def detect_static_site(root: Path, cfg: Dict[str, str]) -> StaticSiteInfo:
     return StaticSiteInfo(exists=False)
 
 # ============================================================
-# BAT generation (ANSI + 中文 + default ports)
+# BAT generation (UTF-8 + chcp 65001 + default ports)
 # ============================================================
 
 def write_run_app_bat(root: Path, script_name: str, backend: dict,
@@ -763,11 +765,13 @@ start "Frontend" cmd /k "cd /d "{static_site.dir}" ^&^& "%PYEXE%" -m http.server
         open_block += "echo [INFO] 前端未提供可開啟的 URL（未偵測 port 或未啟動）。\n"
 
     bat_text = rf"""@echo off
+chcp 65001 >nul
 setlocal ENABLEDELAYEDEXPANSION
 
 REM =========================================
 REM 一鍵安裝 / 啟動（穩定版）
-REM 檔名固定：run_app.bat（ANSI 編碼）
+REM 檔名固定：run_app.bat（UTF-8 編碼）
+REM 注意：本檔會先切換 code page 為 UTF-8（chcp 65001）
 REM 由 {script_name} 自動產生
 REM =========================================
 
@@ -835,7 +839,7 @@ popd
 endlocal
 """
     out_path = root / "run_app.bat"
-    write_text_ansi(out_path, bat_text)
+    write_text_utf8_bom(out_path, bat_text)
     return out_path
 
 # ============================================================
@@ -889,7 +893,7 @@ def full_auto(root: Path, venv_dir: str) -> Tuple[int, str]:
 
     # summary
     lines = []
-    lines.append("OK：requirements 已自動生成/修正，pip install / pip check / import test 全部通過；已產生 run_app.bat（ANSI）。")
+    lines.append("OK：requirements 已自動生成/修正，pip install / pip check / import test 全部通過；已產生 run_app.bat（UTF-8）。")
     lines.append(f"- 後端模式：{backend.get('mode')}")
     if backend.get("mode") == "uvicorn":
         lines.append(f"- uvicorn target：{backend.get('target')}")
