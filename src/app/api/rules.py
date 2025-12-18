@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+import logging
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
@@ -8,9 +9,10 @@ from sqlmodel import Session, select
 from app.api.deps import db_session
 from app.models.entities import Rule
 from app.schemas.common import ok
-from app.services.rules import stream_nl_to_dsl, dsl_to_nl, validate_dsl
+from app.services.rules import stream_nl_to_dsl, dsl_to_nl, validate_dsl, stream_nl_to_dsl_events
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
+logger = logging.getLogger(__name__)
 
 
 class RuleUpsert(BaseModel):
@@ -68,6 +70,26 @@ class NLReq(BaseModel):
 def nl_to_dsl_stream(text: str):
     gen = stream_nl_to_dsl(text)
     return StreamingResponse(gen, media_type="text/event-stream")
+
+
+@router.websocket("/nl_to_dsl_ws")
+async def nl_to_dsl_ws(websocket: WebSocket):
+    await websocket.accept()
+    text = websocket.query_params.get("text", "")
+    try:
+        for event, payload in stream_nl_to_dsl_events(text):
+            await websocket.send_json({"event": event, "data": payload})
+    except WebSocketDisconnect:
+        logger.info("NL→DSL WebSocket client disconnected")
+    except Exception:
+        logger.exception("NL→DSL WebSocket 失敗")
+        await websocket.send_json({"event": "error", "data": {"message": "轉譯失敗，請稍後再試。"}})
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            # 已斷線則忽略
+            pass
 
 
 @router.post("/dsl_to_nl")

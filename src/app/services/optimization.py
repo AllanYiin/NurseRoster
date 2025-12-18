@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import date, datetime, timedelta
 from typing import Dict, Generator, List, Tuple
@@ -9,6 +10,8 @@ from sqlmodel import Session, select
 
 from app.db.session import get_session
 from app.models.entities import Assignment, Nurse, OptimizationJob, Project, Rule, ShiftCode
+
+logger = logging.getLogger(__name__)
 
 
 def sse_event(event: str, data: dict) -> str:
@@ -70,7 +73,8 @@ def _parse_enabled_rules(session: Session, project_id: int) -> dict:
                 elif name == "prefer_off_after_night":
                     w = int(c.get("weight") or c.get("penalty") or 1)
                     conf["prefer_off_after_night"] = max(conf["prefer_off_after_night"], w)
-        except Exception:
+        except Exception as exc:
+            logger.warning("規則 DSL 解析失敗，已忽略（rule_id=%s）：%s", getattr(r, "id", None), exc)
             continue
 
     return conf
@@ -294,6 +298,7 @@ def stream_job_run(job_id: int) -> Generator[str, None, None]:
         yield sse_event("completed", {"job_id": job_id, "status": "succeeded"})
 
     except Exception as e:
+        logger.exception("最佳化任務失敗，job_id=%s", job_id)
         with get_session() as s:
             job = s.get(OptimizationJob, job_id)
             if job:

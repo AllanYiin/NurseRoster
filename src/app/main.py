@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import traceback
+import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,11 +17,17 @@ from app.api.rules import router as rules_router
 from app.api.optimization import router as opt_router
 from app.api.projects import router as projects_router
 
+logger = logging.getLogger(__name__)
+
 
 def create_app() -> FastAPI:
     setup_logging()
-    init_db()
-    seed_if_empty()
+    try:
+        init_db()
+        seed_if_empty()
+    except Exception:
+        logger.exception("初始化失敗，請檢查資料庫與設定。")
+        raise
 
     app = FastAPI(title="Nurse Scheduler v1", version="1.0.0")
 
@@ -47,15 +53,15 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        tb = traceback.format_exc()
-        # 不在 response 輸出敏感資料（此專案無）
+        logger.exception("未處理例外：%s %s", request.method, request.url.path)
         return JSONResponse(
             status_code=500,
             content={
                 "ok": False,
-                "error": "發生錯誤。請複製以下訊息並發送給您的 AI 助手：",
-                "traceback": tb,
-                "path": str(request.url.path),
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "系統發生錯誤，請稍後再試。如持續發生請提供時間點給管理員。",
+                },
             },
         )
 
