@@ -1,0 +1,179 @@
+:root{
+  --bg:#f7f8fb;
+  --card:#ffffff;
+  --ink:#1f2a37;
+  --muted:#6b7280;
+  --border:#e5e7eb;
+  --primary:#2563eb;
+  --primary-2:#1d4ed8;
+  --good:#10b981;
+  --warn:#f59e0b;
+  --bad:#ef4444;
+  --shadow:0 10px 30px rgba(15,23,42,0.08);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans TC", "Microsoft JhengHei", Arial;
+  color:var(--ink);
+  background:var(--bg);
+}
+.app{display:grid; grid-template-columns: 260px 1fr; height:100%}
+.sidebar{background:#0b1220; color:#cbd5e1; padding:18px; display:flex; flex-direction:column; gap:18px}
+.brand{display:flex; gap:12px; align-items:center}
+.brand__logo{width:40px;height:40px;border-radius:12px; background:rgba(37,99,235,0.25); display:grid; place-items:center; color:#93c5fd; font-weight:800}
+.brand__text{display:flex; flex-direction:column}
+.brand__title{font-weight:800; color:#e2e8f0}
+.brand__subtitle{font-size:12px;color:#94a3b8}
+.brand__sub{font-size:12px;color:#94a3b8}
+.nav{display:flex; flex-direction:column; gap:6px}
+.nav button,
+.nav__item{
+  text-align:left;
+  border:1px solid rgba(148,163,184,0.15);
+  background:rgba(148,163,184,0.06);
+  color:#e2e8f0;
+  padding:10px 12px;
+  border-radius:12px;
+  cursor:pointer;
+  transition: all .15s ease;
+}
+.nav button:hover,
+.nav__item:hover{background:rgba(148,163,184,0.12)}
+.nav button.active,
+.nav__item.is-active{background:rgba(37,99,235,0.25); border-color:rgba(147,197,253,0.35)}
+.sidebar__footer{margin-top:auto; font-size:12px; color:#94a3b8}
+.main{padding:20px; overflow:auto}
+.topbar{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px}
+.h1{font-size:20px; font-weight:800}
+.badge{display:inline-flex; gap:8px; align-items:center; font-size:12px; color:var(--muted); background:var(--card); border:1px solid var(--border); border-radius:999px; padding:6px 10px; box-shadow: var(--shadow)}
+.badge .dot{width:8px;height:8px;border-radius:999px; background:var(--good)}
+.grid{display:grid; grid-template-columns: 1fr 1fr; gap:16px}
+.card{background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow: var(--shadow)}
+.card__hd{padding:14px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between}
+.card__bd{padding:16px}
+.btn{border:1px solid var(--border); background:#fff; padding:8px 10px; border-radius:12px; cursor:pointer}
+.btn.primary{background:var(--primary); border-color:var(--primary); color:white}
+.btn.primary:hover{background:var(--primary-2)}
+.btn--primary{background:var(--primary); border-color:var(--primary); color:#fff}
+.btn--primary:hover{background:var(--primary-2)}
+.btn--ghost{background:transparent}
+.btn--sm{padding:6px 8px; border-radius:10px; font-size:13px}
+.input, select, textarea{
+  width:100%;
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:10px 12px;
+  font-size:14px;
+  outline:none;
+}
+.row{display:grid; grid-template-columns: 1fr 1fr; gap:12px}
+.table{width:100%; border-collapse:separate; border-spacing:0; overflow:hidden; border:1px solid var(--border); border-radius:14px}
+.table th, .table td{padding:10px 10px; border-bottom:1px solid var(--border); font-size:14px}
+.table th{background:#f8fafc; text-align:left; color:#334155}
+.table tr:last-child td{border-bottom:none}
+.pill{display:inline-flex; align-items:center; justify-content:center; padding:4px 8px; border-radius:999px; font-size:12px; border:1px solid var(--border); background:#fff}
+.kbd{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New"; font-size:12px; background:#0b1220; color:#e2e8f0; padding:2px 6px; border-radius:8px}
+.calendar{display:grid; grid-template-columns: 160px repeat(7, 1fr); border:1px solid var(--border); border-radius:16px; overflow:hidden}
+.cal__hd{background:#f8fafc; padding:10px; font-weight:700; border-bottom:1px solid var(--border)}
+.cal__cell{padding:8px; border-bottom:1px solid var(--border); border-right:1px solid var(--border); min-height:44px; display:flex; align-items:center; justify-content:space-between; gap:8px}
+.cal__cell:last-child{border-right:none}
+.cal__rowlabel{background:#f8fafc; font-weight:700}
+.tag{display:inline-flex; align-items:center; gap:6px}
+.tag .swatch{width:10px;height:10px;border-radius:4px; border:1px solid rgba(0,0,0,0.06)}
+.muted{color:var(--muted)}
+.strong{font-weight:800}
+
+/* views */
+.view.is-hidden{display:none}
+
+/* tabs */
+.tabs{display:flex; gap:8px; margin-bottom:10px}
+.tab{border:1px solid var(--border); background:#fff; padding:8px 10px; border-radius:12px; cursor:pointer}
+.tab.is-active{background:#eef2ff; border-color:#c7d2fe}
+
+/* Calendar (new markup in app.js) */
+.cal{border:1px solid var(--border); border-radius:16px; overflow:hidden; background:#fff}
+.cal__head{display:grid; grid-template-columns: 240px repeat(7, 1fr); background:#f8fafc; border-bottom:1px solid var(--border)}
+.cal__corner,.cal__day{padding:10px; font-weight:800; font-size:13px; color:#334155; border-right:1px solid var(--border)}
+.cal__day:last-child{border-right:none}
+.cal__body{display:flex; flex-direction:column}
+.cal__row{display:grid; grid-template-columns: 240px repeat(7, 1fr)}
+.cal__nurse{padding:10px; border-bottom:1px solid var(--border); border-right:1px solid var(--border); background:#fbfdff}
+.cell{border:none; border-bottom:1px solid var(--border); border-right:1px solid var(--border); min-height:54px; padding:8px; text-align:left; cursor:pointer; background:#fff}
+.cal__row .cell:last-child{border-right:none}
+.cell__code{font-weight:800; font-size:14px}
+.cell__note{margin-top:4px; font-size:12px; color:var(--muted); line-height:1.2}
+
+/* Form helpers */
+.form{display:flex; flex-direction:column; gap:10px}
+.field{display:flex; flex-direction:column; gap:6px; font-size:13px}
+.field span{color:#334155; font-weight:700}
+.field.full{width:100%}
+
+/* Progress + log */
+.progress{height:10px; border:1px solid var(--border); border-radius:999px; overflow:hidden; background:#fff; margin-top:10px}
+.progress__bar{height:100%; background:var(--primary)}
+.log{background:#0b1220; color:#e2e8f0; border-radius:14px; padding:12px; min-height:220px; max-height:320px; overflow:auto; white-space:pre-wrap}
+
+/* Modal (align class names in index.html) */
+.modal.is-hidden{display:none}
+.iconbtn{border:1px solid var(--border); background:#fff; width:34px; height:34px; border-radius:12px; cursor:pointer}
+
+/* Toast */
+#toast{position:fixed; right:16px; bottom:16px; padding:10px 12px; border-radius:14px; border:1px solid var(--border); background:#fff; box-shadow:var(--shadow); opacity:0; transform:translateY(8px); transition:all .18s ease; max-width:min(520px, calc(100vw - 32px)); z-index:9999}
+#toast.show{opacity:1; transform:translateY(0)}
+#toast.good{border-color:rgba(16,185,129,0.4)}
+#toast.warn{border-color:rgba(245,158,11,0.5)}
+#toast.bad{border-color:rgba(239,68,68,0.5)}
+.modal{position:fixed; inset:0; background:rgba(15,23,42,0.45); display:none; align-items:center; justify-content:center; padding:18px}
+.modal.show{display:flex}
+.modal__panel{width:min(720px, 100%); background:#fff; border-radius:18px; border:1px solid var(--border); box-shadow: var(--shadow)}
+.modal__hd{padding:14px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between}
+.modal__bd{padding:16px}
+.modal__ft{padding:14px 16px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:10px}
+pre{white-space:pre-wrap; word-break:break-word; margin:0}
+
+/* ===== v1 UI aliases for templates/index.html ===== */
+.btn--ghost{background:transparent}
+.btn--sm{padding:6px 8px; border-radius:10px; font-size:12px}
+.iconbtn{border:1px solid var(--border); background:#fff; width:32px; height:32px; border-radius:10px; cursor:pointer}
+
+.content{display:block}
+.view.is-hidden{display:none}
+
+.field{display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--muted)}
+.field input, .field select, .field textarea{font-size:14px; color:var(--ink)}
+.field.full{width:100%}
+
+.tabs{display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap}
+.tab{border:1px solid var(--border); background:#fff; padding:8px 10px; border-radius:12px; cursor:pointer}
+.tab.is-active{background:rgba(37,99,235,0.08); border-color:rgba(37,99,235,0.35)}
+
+.grid2{display:grid; grid-template-columns: 1fr 1fr; gap:14px}
+@media (max-width: 1100px){ .grid2{grid-template-columns:1fr} }
+
+.progress{height:10px; border:1px solid var(--border); border-radius:999px; overflow:hidden; background:#fff; margin-top:10px}
+.progress__bar{height:100%; background:rgba(37,99,235,0.65)}
+.log{height:260px; overflow:auto; border:1px solid var(--border); border-radius:12px; padding:10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New"; font-size:12px; background:#0b1220; color:#e2e8f0; white-space:pre;}
+
+/* Calendar grid built in app.js */
+.cal{border:1px solid var(--border); border-radius:16px; overflow:hidden}
+.cal__head{display:grid; grid-template-columns: 220px repeat(7, 1fr); background:#f8fafc; border-bottom:1px solid var(--border)}
+.cal__corner{padding:10px; font-weight:700}
+.cal__day{padding:10px; font-weight:700; border-left:1px solid var(--border)}
+.cal__body{display:flex; flex-direction:column}
+.cal__row{display:grid; grid-template-columns: 220px repeat(7, 1fr); border-bottom:1px solid var(--border)}
+.cal__row:last-child{border-bottom:none}
+.cal__nurse{padding:10px; background:#fff}
+.cell{border:none; border-left:1px solid var(--border); padding:8px; min-height:54px; text-align:left; cursor:pointer; display:flex; flex-direction:column; gap:4px}
+.cell__code{font-weight:800}
+.cell__note{font-size:12px; color:var(--muted)}
+
+/* Toast */
+#toast{position:fixed; right:18px; bottom:18px; z-index:9999; opacity:0; transform:translateY(8px); transition:all .2s ease; background:#111827; color:#fff; padding:10px 12px; border-radius:14px; max-width:min(420px, calc(100vw - 36px)); box-shadow: var(--shadow)}
+#toast.show{opacity:1; transform:translateY(0)}
+#toast.good{background:#065f46}
+#toast.warn{background:#92400e}
+#toast.bad{background:#7f1d1d}
