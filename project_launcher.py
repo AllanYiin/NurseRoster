@@ -111,7 +111,11 @@ def read_text(p: Path) -> str:
 
 def write_text_ansi(p: Path, text: str) -> None:
     enc = "mbcs" if is_windows() else "cp1252"
-    p.write_text(text, encoding=enc, errors="strict")
+    try:
+        p.write_text(text, encoding=enc, errors="strict")
+    except UnicodeEncodeError:
+        # 部分非 Windows 環境的 cp1252 無法覆蓋中文，改用 UTF-8 BOM 確保 run_app.bat 仍可生成
+        p.write_text(text, encoding="utf-8-sig", errors="strict")
 
 def safe_int(s: str) -> Optional[int]:
     try:
