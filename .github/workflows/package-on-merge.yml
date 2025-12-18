@@ -17,9 +17,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate latest .env.example
+        run: |
+          python scripts/generate_env_example.py --output .env.example --log-dir logs
+
       - name: Verify required top-level files
         run: |
-          for file in README.md requirements.txt project_launcher.py run_app.bat; do
+          for file in README.md requirements.txt project_launcher.py run_app.bat .env.example; do
             if [ ! -f "$file" ]; then
               echo "Missing required file: $file" >&2
               exit 1
@@ -39,6 +48,13 @@ jobs:
             --exclude ".venv" --exclude "venv" \
             --exclude "dist" --exclude "build" \
             --exclude "node_modules"
+
+      - name: Ensure archive contains .env.example
+        run: |
+          if [ ! -f "${{ env.ARCHIVE_PATH }}/.env.example" ]; then
+            echo "Archive missing .env.example" >&2
+            exit 1
+          fi
 
       - name: Upload archive artifact
         uses: actions/upload-artifact@v4
