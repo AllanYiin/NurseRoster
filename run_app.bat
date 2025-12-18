@@ -26,8 +26,18 @@ if exist "%PROJECT_ROOT%requirements.txt" (
 )
 
 echo [3/4] 檢查預設環境變數...
-if "%APP_HOST%"=="" set APP_HOST=127.0.0.1
-if "%APP_PORT%"=="" set APP_PORT=8000
+if "%BACKEND_HOST%"=="" (
+    if not "%APP_HOST%"=="" (
+        set BACKEND_HOST=%APP_HOST%
+    )
+)
+if "%BACKEND_PORT%"=="" (
+    if not "%APP_PORT%"=="" (
+        set BACKEND_PORT=%APP_PORT%
+    )
+)
+if not "%BACKEND_HOST%"=="" set APP_HOST=%BACKEND_HOST%
+if not "%BACKEND_PORT%"=="" set APP_PORT=%BACKEND_PORT%
 
 echo [4/4] 啟動應用服務 (CTRL+C 可結束)...
 pushd "%PROJECT_ROOT%"

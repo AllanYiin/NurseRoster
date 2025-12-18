@@ -6,6 +6,21 @@ from pathlib import Path
 # 專案根目錄（root/run_app.bat 同層）
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
+
+def _load_env_file(env_path: Path) -> None:
+    if not env_path.exists():
+        return
+
+    for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+_load_env_file(PROJECT_ROOT / ".env")
+
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
 DEFAULT_EXPORT_DIR = PROJECT_ROOT / "exports"
@@ -19,5 +34,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = os.getenv("DB_PATH", str(DATA_DIR / "app.db"))
-APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
-APP_PORT = int(os.getenv("APP_PORT", "8000"))
+BACKEND_HOST = os.getenv("BACKEND_HOST") or os.getenv("APP_HOST") or "127.0.0.1"
+BACKEND_PORT = int(os.getenv("BACKEND_PORT") or os.getenv("APP_PORT") or "8000")
+APP_HOST = BACKEND_HOST
+APP_PORT = BACKEND_PORT

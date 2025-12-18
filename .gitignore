@@ -1,0 +1,18 @@
+# Virtual environments
+.venv/
+venv/
+
+# Python cache & build
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Local data and logs
+data/
+logs/
+exports/
+
+# Environment files
+.env
+.env.local

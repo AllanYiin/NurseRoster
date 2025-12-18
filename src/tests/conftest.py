@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import importlib
 import sys
+from pathlib import Path
 from typing import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
-def _reload_module(name: str):
+
+def _reload_module(name: str) -> None:
     if name in sys.modules:
         importlib.reload(sys.modules[name])
     else:
@@ -21,8 +27,8 @@ def test_context(tmp_path, monkeypatch) -> Iterator[dict]:
     data_dir = tmp_path / "data"
     log_dir = tmp_path / "logs"
     export_dir = tmp_path / "exports"
-    for d in (data_dir, log_dir, export_dir):
-        d.mkdir(parents=True, exist_ok=True)
+    for directory in (data_dir, log_dir, export_dir):
+        directory.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setenv("DATA_DIR", str(data_dir))
     monkeypatch.setenv("LOG_DIR", str(log_dir))
@@ -31,8 +37,8 @@ def test_context(tmp_path, monkeypatch) -> Iterator[dict]:
     monkeypatch.setenv("SKIP_SEED", "1")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    for mod in ["app.core.config", "app.db.session", "app.services.seed"]:
-        _reload_module(mod)
+    for module_name in ["app.core.config", "app.db.session", "app.services.seed"]:
+        _reload_module(module_name)
 
     from app import main as app_main
     from app.db import session as db_session
