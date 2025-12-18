@@ -112,8 +112,7 @@ def read_text(p: Path) -> str:
 def write_text_utf8_bom(p: Path, text: str) -> None:
     # Use UTF-8 with BOM for maximum compatibility with Windows cmd.exe/bat files.
     # newline is forced to CRLF to avoid edge cases in some Windows environments.
-    p.write_text(text, encoding="utf-8-sig", newline="
-")
+    p.write_text(text, encoding="utf-8-sig", newline="\r\n")
 
 def safe_int(s: str) -> Optional[int]:
     try:
