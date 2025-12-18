@@ -44,4 +44,19 @@ jobs:
         env:
           SKIP_SEED: "1"
         run: |
-          python -m pytest Tests tests
+          TEST_DIRS=()
+
+          if [ -d Tests ]; then
+            TEST_DIRS+=("Tests")
+          fi
+
+          if [ -d tests ]; then
+            TEST_DIRS+=("tests")
+          fi
+
+          if [ ${#TEST_DIRS[@]} -eq 0 ]; then
+            echo "No test directories found to run" >&2
+            exit 1
+          fi
+
+          python -m pytest "${TEST_DIRS[@]}"
