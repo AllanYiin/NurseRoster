@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.core.logging import setup_logging
+from app.core.config import PROJECT_ROOT
 from app.db.session import init_db
 from app.services.seed import seed_if_empty
 
@@ -20,7 +20,8 @@ from app.api.projects import router as projects_router
 from app.api.dsl import router as dsl_router
 
 logger = logging.getLogger(__name__)
-APP_DIR = Path(__file__).resolve().parent
+FRONTEND_PUBLIC_DIR = PROJECT_ROOT / "frontend" / "public"
+STATIC_DIR = FRONTEND_PUBLIC_DIR / "static"
 
 
 def create_app() -> FastAPI:
@@ -34,9 +35,9 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="Nurse Scheduler v1", version="1.0.0")
 
-    templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+    templates = Jinja2Templates(directory=str(FRONTEND_PUBLIC_DIR))
 
-    app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request):
