@@ -368,6 +368,66 @@ def dsl_to_nl(dsl_text: str) -> str:
         return "無法解析 DSL（請確認格式為 JSON）。"
 
 
+def dsl_to_nl_with_prompt(dsl_text: str, system_prompt: str | None = None) -> dict:
+    """支援自訂 System Prompt 的反向翻譯，若無 LLM 則回退內建摘要。"""
+    base_text = dsl_to_nl(dsl_text)
+    prompt = (system_prompt or "").strip()
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    model = os.getenv("OPENAI_RESPONSES_MODEL", "gpt-4.1")
+
+    if not prompt:
+        return {
+            "text": base_text,
+            "source": "local",
+            "prompt_applied": False,
+            "warnings": ["未提供 System Prompt，已使用內建摘要。"],
+        }
+    if not api_key:
+        return {
+            "text": base_text,
+            "source": "local",
+            "prompt_applied": False,
+            "warnings": ["未設定 OPENAI_API_KEY，自訂 System Prompt 未套用，已使用內建摘要。"],
+        }
+
+    from openai import OpenAI
+
+    try:
+        client = OpenAI(api_key=api_key)
+        system = prompt + "\n請將輸入的 DSL 轉成清晰的繁體中文規則描述。只輸出轉譯結果，不要補充其他說明。"
+        stream = client.responses.create(
+            model=model,
+            input=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": f"請轉寫以下 DSL：\n{dsl_text}"},
+            ],
+            stream=True,
+        )
+        buf = ""
+        for ev in stream:
+            et = getattr(ev, "type", "")
+            if et in ("response.output_text.delta", "response.output_text"):
+                delta = getattr(ev, "delta", None) or getattr(ev, "text", None) or ""
+                buf += delta
+            if et == "response.completed":
+                break
+        final_text = buf.strip() or base_text
+        return {
+            "text": final_text,
+            "source": "llm",
+            "prompt_applied": True,
+            "warnings": [],
+        }
+    except Exception:
+        logger.exception("DSL→NL (custom prompt) 失敗，已回退內建摘要。")
+        return {
+            "text": base_text,
+            "source": "local",
+            "prompt_applied": False,
+            "warnings": ["LLM 轉譯失敗，已回退內建摘要。"],
+        }
+
+
 def validate_dsl(dsl_text: str, *, session: Session | None = None, rule: Rule | None = None) -> dict:
     """進階 validator：schema/邏輯/參照完整性/dsl_version 相容性。"""
     issues: list[str] = []
