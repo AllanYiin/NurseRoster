@@ -34,7 +34,16 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = os.getenv("DB_PATH", str(DATA_DIR / "app.db"))
-BACKEND_HOST = os.getenv("BACKEND_HOST") or os.getenv("APP_HOST") or "127.0.0.1"
-BACKEND_PORT = int(os.getenv("BACKEND_PORT") or os.getenv("APP_PORT") or "8000")
+
+_HOST_ENV = os.getenv("BACKEND_HOST") or os.getenv("APP_HOST")
+_PORT_ENV = os.getenv("BACKEND_PORT") or os.getenv("APP_PORT") or os.getenv("PORT")
+
+BACKEND_HOST = _HOST_ENV or ("0.0.0.0" if os.getenv("PORT") else "127.0.0.1")
+
+try:
+    BACKEND_PORT = int(_PORT_ENV) if _PORT_ENV else 8000
+except ValueError:
+    BACKEND_PORT = 8000
+
 APP_HOST = BACKEND_HOST
 APP_PORT = BACKEND_PORT
