@@ -9,7 +9,7 @@ from typing import Dict, Generator, List, Tuple
 from sqlmodel import Session, select
 
 from app.db.session import get_session
-from app.models.entities import Assignment, Nurse, OptimizationJob, Project, Rule, ShiftCode
+from app.models.entities import Assignment, JobStatus, Nurse, OptimizationJob, Project, Rule, ShiftCode
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ def sse_event(event: str, data: dict) -> str:
 
 
 def enqueue_job(session: Session, project_id: int) -> OptimizationJob:
-    job = OptimizationJob(project_id=project_id, status="queued", progress=0, message="")
+    job = OptimizationJob(project_id=project_id, status=JobStatus.QUEUED, progress=0, message="")
     session.add(job)
     session.commit()
     session.refresh(job)
@@ -112,7 +112,7 @@ def stream_job_run(job_id: int) -> Generator[str, None, None]:
             if job is None:
                 yield sse_event("error", {"message": "找不到 job"})
                 return
-            job.status = "running"
+            job.status = JobStatus.RUNNING
             job.progress = 0
             job.updated_at = datetime.utcnow()
             s.add(job)
@@ -288,21 +288,21 @@ def stream_job_run(job_id: int) -> Generator[str, None, None]:
         with get_session() as s:
             job = s.get(OptimizationJob, job_id)
             if job:
-                job.status = "succeeded"
+                job.status = JobStatus.SUCCEEDED
                 job.progress = 100
                 job.updated_at = datetime.utcnow()
                 job.message = "完成"
                 s.add(job)
                 s.commit()
 
-        yield sse_event("completed", {"job_id": job_id, "status": "succeeded"})
+        yield sse_event("completed", {"job_id": job_id, "status": JobStatus.SUCCEEDED.value})
 
     except Exception as e:
         logger.exception("最佳化任務失敗，job_id=%s", job_id)
         with get_session() as s:
             job = s.get(OptimizationJob, job_id)
             if job:
-                job.status = "failed"
+                job.status = JobStatus.FAILED
                 job.updated_at = datetime.utcnow()
                 job.message = f"failed: {e}"
                 s.add(job)
@@ -358,11 +358,11 @@ def _run_fallback_mock(
     with get_session() as s:
         job = s.get(OptimizationJob, job_id)
         if job:
-            job.status = "succeeded"
+            job.status = JobStatus.SUCCEEDED
             job.progress = 100
             job.updated_at = datetime.utcnow()
             job.message = "完成（mock）"
             s.add(job)
             s.commit()
 
-    yield sse_event("completed", {"job_id": job_id, "status": "succeeded"})
+    yield sse_event("completed", {"job_id": job_id, "status": JobStatus.SUCCEEDED.value})
