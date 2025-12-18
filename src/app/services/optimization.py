@@ -93,7 +93,7 @@ def apply_job_result(job_id: int) -> OptimizationJob | None:
         snapshot = ProjectSnapshot(
             project_id=job.project_id or 0,
             name=f"optim_job_{job_id}",
-            snapshot={"assignments": [a.model_dump() for a in assignments]},
+            snapshot={"assignments": [json.loads(a.model_dump_json()) for a in assignments]},
         )
         s.add(snapshot)
         s.commit()

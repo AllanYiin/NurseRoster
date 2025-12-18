@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from calendar import monthrange
-from datetime import date, datetime, timedelta
+from datetime import date as dt_date, datetime, timedelta
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/schedule", tags=["schedule"])
 
 class AssignmentPayload(BaseModel):
     project_id: int
-    day: date
+    day: dt_date
     nurse_staff_no: str
     shift_code: str = ""
     note: str = ""
@@ -29,12 +29,12 @@ class Conflict(BaseModel):
     rule_title: str
     severity: str
     message: str
-    date: Optional[date] = None
+    date: Optional[dt_date] = None
     nurse_staff_no: Optional[str] = None
     shift_code: Optional[str] = None
 
 
-def _project_date_range(session: Session, project: Project, start: Optional[date], end: Optional[date]) -> tuple[date, date]:
+def _project_date_range(session: Session, project: Project, start: Optional[dt_date], end: Optional[dt_date]) -> tuple[dt_date, dt_date]:
     if start and end:
         return start, end
     if project.schedule_period_id:
@@ -43,11 +43,11 @@ def _project_date_range(session: Session, project: Project, start: Optional[date
             return start or period.start_date, end or period.end_date
     try:
         year, month = map(int, project.month.split("-"))
-        first = date(year, month, 1)
-        last = date(year, month, monthrange(year, month)[1])
+        first = dt_date(year, month, 1)
+        last = dt_date(year, month, monthrange(year, month)[1])
         return start or first, end or last
     except Exception:
-        today = date.today()
+        today = dt_date.today()
         return start or today, end or today
 
 
@@ -66,14 +66,14 @@ def _severity(rule: Rule) -> str:
     return "error" if rule.rule_type == RuleType.HARD else "warn"
 
 
-def _collect_assignments(session: Session, project_id: int, start: date, end: date) -> List[Assignment]:
+def _collect_assignments(session: Session, project_id: int, start: dt_date, end: dt_date) -> List[Assignment]:
     return session.exec(
         select(Assignment).where(Assignment.project_id == project_id, Assignment.day >= start, Assignment.day <= end)
     ).all()
 
 
 @router.get("/assignments")
-def list_assignments(project_id: int, start: Optional[date] = None, end: Optional[date] = None, session: Session = Depends(db_session)):
+def list_assignments(project_id: int, start: Optional[dt_date] = None, end: Optional[dt_date] = None, session: Session = Depends(db_session)):
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="找不到專案")
@@ -105,7 +105,7 @@ def upsert_assignments(payload: List[AssignmentPayload], session: Session = Depe
 
 
 @router.get("/conflicts")
-def list_conflicts(project_id: int, start: Optional[date] = None, end: Optional[date] = None, session: Session = Depends(db_session)):
+def list_conflicts(project_id: int, start: Optional[dt_date] = None, end: Optional[dt_date] = None, session: Session = Depends(db_session)):
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="找不到專案")
@@ -118,7 +118,7 @@ def list_conflicts(project_id: int, start: Optional[date] = None, end: Optional[
         assignments_by_date.setdefault(a.day, []).append(a)
         assignments_by_pair[(a.nurse_staff_no, a.day)] = a
 
-    all_dates: List[date] = []
+    all_dates: List[dt_date] = []
     cur = start_date
     while cur <= end_date:
         all_dates.append(cur)
