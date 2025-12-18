@@ -7,6 +7,8 @@
   - `LOG_DIR=/data/logs`
   - `DB_PATH=/data/app.db`
 - **容器啟動參數**：後端以 `python -m app` 啟動（工作目錄 `backend/`），請在 Zeabur 服務環境中設定 `BACKEND_HOST=0.0.0.0`、`BACKEND_PORT=8000`（也會向下相容 `APP_HOST`/`APP_PORT`），並開啟健康檢查 `/api/health`。
+  - 若 Zeabur 預設以「專案根目錄 + `python -m app`」啟動而未切換至 `backend/`，會觸發 `No module named app` 並導致容器重啟。建議改用 `python start_backend.py` 或於啟動指令加入 `cd backend && python -m app`。
+  - Zeabur 會下發 `PORT` 環境變數；專案會自動將 `PORT` 帶入 `BACKEND_PORT` 並將 Host 改為 `0.0.0.0`，無需額外設定。
 - **網路路由**：前端呼叫後端時，請在環境變數或前端設定中指向後端公開 URL（HTTPS）。SSE 與 WebSocket 均需允許跨站（Zeabur 反向代理會自動處理 `Connection: keep-alive`/`upgrade`）。
 
 ## 目錄結構與環境變數
