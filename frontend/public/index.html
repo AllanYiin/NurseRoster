@@ -62,6 +62,14 @@
                   <span>起始日</span>
                   <input type="date" id="calStart" />
                 </label>
+                <label class="field">
+                  <span>範圍</span>
+                  <select id="calRange">
+                    <option value="7">7 天</option>
+                    <option value="28" selected>28 天</option>
+                    <option value="month">月視圖</option>
+                  </select>
+                </label>
                 <button class="btn btn--primary" id="btnLoadCalendar">載入</button>
               </div>
             </div>
@@ -69,7 +77,7 @@
               <div class="calendar" id="calendarGrid"></div>
             </div>
             <div class="card__ft">
-              <div class="muted">點選格子可編輯班別與備註。v1 以 7 天週檢視呈現。</div>
+              <div class="muted">點選格子可編輯班別與備註。支援 7 天、28 天與整月視圖。</div>
             </div>
           </div>
         </div>
@@ -105,6 +113,53 @@
               <div class="card__bd">
                 <textarea id="dslOutput" rows="14" placeholder="這裡會即時輸出 DSL"></textarea>
                 <div class="muted" id="dslStatus"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top: 14px;">
+            <div class="card__hd">
+              <div class="card__title">規則對話介面（多輪 + 衝突檢視）</div>
+              <div class="card__actions">
+                <label class="field">
+                  <span>衝突起</span>
+                  <input type="date" id="conflictStart" />
+                </label>
+                <label class="field">
+                  <span>衝突迄</span>
+                  <input type="date" id="conflictEnd" />
+                </label>
+                <button class="btn" id="btnReloadConflicts">重新整理衝突</button>
+              </div>
+            </div>
+            <div class="card__bd rulechat">
+              <div class="rulechat__main">
+                <div class="chatlog" id="ruleChatLog"></div>
+                <div class="form" style="margin-top:12px;">
+                  <label class="field full">
+                    <span>對話輸入</span>
+                    <textarea id="chatInput" rows="3" placeholder="描述想新增/調整的規則，系統會以串流方式回覆 DSL"></textarea>
+                  </label>
+                  <div class="row">
+                    <button class="btn btn--primary" id="btnChatSend">送出並轉譯</button>
+                    <button class="btn" id="btnChatApplyToDsl">將底稿套用到右側 DSL</button>
+                  </div>
+                  <div class="muted" id="chatStatus"></div>
+                </div>
+              </div>
+              <div class="rulechat__side">
+                <div class="subcard">
+                  <div class="subcard__title">規則衝突總覽</div>
+                  <div class="conflict-list" id="conflictList"></div>
+                </div>
+                <div class="subcard">
+                  <div class="subcard__title">對話底稿 DSL</div>
+                  <textarea id="ruleChatScratch" rows="8" placeholder="串流結果會放在這裡，可帶到編輯器或測試台"></textarea>
+                  <div class="row">
+                    <button class="btn" id="btnScratchToDsl">帶到 DSL 編輯器</button>
+                    <button class="btn" id="btnScratchToTester">帶到 DSL 測試台</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -211,14 +266,35 @@
         <div class="view is-hidden" id="view-dsl">
           <div class="card">
             <div class="card__hd">
-              <div class="card__title">DSL 驗證器</div>
+              <div class="card__title">DSL 雙向測試台</div>
               <div class="card__actions">
-                <button class="btn btn--primary" id="btnDslValidateOnly">驗證</button>
+                <button class="btn btn--primary" id="btnDslValidateOnly">僅驗證</button>
               </div>
             </div>
-            <div class="card__bd">
-              <textarea id="dslTester" rows="18" placeholder="貼上 DSL（JSON）"></textarea>
-              <div class="muted" id="dslTesterStatus"></div>
+            <div class="card__bd dsl-lab">
+              <div class="dsl-lab__col">
+                <label class="field full">
+                  <span>自然語言輸入（NL→DSL）</span>
+                  <textarea id="dslLabNl" rows="6" placeholder="例如：外科白班每天至少 3 人，夜班不可連上 3 天"></textarea>
+                </label>
+                <button class="btn btn--primary" id="btnDslLabNlToDsl">轉成 DSL（SSE）</button>
+                <div class="muted" id="dslLabNlStatus"></div>
+              </div>
+              <div class="dsl-lab__col">
+                <label class="field full">
+                  <span>DSL（JSON）</span>
+                  <textarea id="dslTester" rows="12" placeholder="貼上 DSL（JSON）或由左側串流填入"></textarea>
+                </label>
+                <label class="field full">
+                  <span>自訂 System Prompt（反向翻譯）</span>
+                  <textarea id="dslPrompt" rows="4" placeholder="描述你希望的語氣與格式，留白則使用內建摘要"></textarea>
+                </label>
+                <div class="row">
+                  <button class="btn" id="btnDslLabDslToNl">反向翻譯</button>
+                  <button class="btn" id="btnDslLabValidate">驗證</button>
+                </div>
+                <div class="muted" id="dslTesterStatus"></div>
+              </div>
             </div>
           </div>
         </div>

@@ -13,7 +13,14 @@ from app.api.deps import db_session
 from app.db.session import get_session
 from app.models.entities import Rule, RuleVersion, ValidationStatus
 from app.schemas.common import ok
-from app.services.rules import sse_event, stream_nl_to_dsl, dsl_to_nl, validate_dsl, stream_nl_to_dsl_events
+from app.services.rules import (
+    sse_event,
+    stream_nl_to_dsl,
+    dsl_to_nl,
+    dsl_to_nl_with_prompt,
+    validate_dsl,
+    stream_nl_to_dsl_events,
+)
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 logger = logging.getLogger(__name__)
@@ -235,7 +242,9 @@ async def nl_to_dsl_ws(websocket: WebSocket):
 
 @router.post("/dsl_to_nl")
 def api_dsl_to_nl(payload: dict):
-    return ok({"text": dsl_to_nl(payload.get("dsl_text", ""))})
+    result = dsl_to_nl_with_prompt(payload.get("dsl_text", ""), payload.get("system_prompt"))
+    # backward compatible text only consumers
+    return ok(result)
 
 
 @router.get("/dsl/reverse_translate")

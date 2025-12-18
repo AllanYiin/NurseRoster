@@ -62,6 +62,13 @@ function addDays(d, n) {
   return x;
 }
 
+function endOfMonth(d) {
+  const x = new Date(d);
+  x.setMonth(x.getMonth() + 1, 0);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
 function startOfWeek(d) {
   const x = new Date(d);
   const day = (x.getDay() + 6) % 7; // Mon=0
@@ -74,10 +81,21 @@ const state = {
   project: null,
   currentView: "calendar",
   masterKind: "nurses",
+  ruleChat: [],
+  ruleChatScratch: "",
   modal: {
     onOk: null,
   },
 };
+
+function projectMonthRange() {
+  if (!state.project?.month) return null;
+  const [y, m] = state.project.month.split("-").map((x) => Number(x));
+  if (!y || !m) return null;
+  const first = new Date(y, m - 1, 1);
+  const last = endOfMonth(first);
+  return [first, last];
+}
 
 function setView(view) {
   state.currentView = view;
@@ -85,11 +103,11 @@ function setView(view) {
   $$(".view").forEach((v) => v.classList.toggle("is-hidden", v.id !== `view-${view}`));
 
   const titleMap = {
-    calendar: ["排班總覽", "週檢視（v1）"],
-    rules: ["規則維護", "自然語言 ↔ DSL（v1）"],
+    calendar: ["排班總覽", "自訂日期範圍（週 / 28 天 / 月）"],
+    rules: ["規則維護", "自然語言 ↔ DSL + 對話與衝突"],
     master: ["資料維護", "主檔 CRUD（v1）"],
     opt: ["最佳化", "OR-Tools（v1，簡化）"],
-    dsl: ["DSL 測試台", "只做驗證（v1）"],
+    dsl: ["DSL 測試台", "雙向測試（NL ↔ DSL）"],
   };
   const [t, s] = titleMap[view] || ["", ""];
   $("#viewTitle").textContent = t;
@@ -97,10 +115,58 @@ function setView(view) {
 
   // load
   if (view === "calendar") loadCalendar().catch((e) => toast(`載入失敗：${e.message}`, "bad"));
-  if (view === "rules") loadRules().catch((e) => toast(`載入失敗：${e.message}`, "bad"));
+  if (view === "rules") {
+    loadRules().catch((e) => toast(`載入失敗：${e.message}`, "bad"));
+    loadRuleConflicts().catch((e) => toast(`衝突載入失敗：${e.message}`, "bad"));
+  }
   if (view === "master") loadMaster(state.masterKind).catch((e) => toast(`載入失敗：${e.message}`, "bad"));
   if (view === "opt") loadOptimization().catch((e) => toast(`載入失敗：${e.message}`, "bad"));
   if (view === "dsl") initDslTester();
+}
+
+function streamNlToDsl(text, handlers = {}) {
+  const { onStatus, onToken, onCompleted, onError } = handlers;
+  const url = `/api/rules/nl_to_dsl_stream?text=${encodeURIComponent(text || "")}`;
+  const es = new EventSource(url);
+  let closed = false;
+
+  es.addEventListener("status", (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      onStatus && onStatus(d.message || e.data || "");
+    } catch {
+      onStatus && onStatus(e.data);
+    }
+  });
+
+  es.addEventListener("token", (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      onToken && onToken(d.text || e.data || "");
+    } catch {
+      onToken && onToken(e.data);
+    }
+  });
+
+  es.addEventListener("completed", (e) => {
+    closed = true;
+    es.close();
+    try {
+      const d = JSON.parse(e.data);
+      onCompleted && onCompleted(d.dsl_text || null);
+    } catch {
+      onCompleted && onCompleted(null);
+    }
+  });
+
+  es.addEventListener("error", () => {
+    if (!closed) {
+      es.close();
+      onError && onError(new Error("串流中斷（可能是後端錯誤或連線中斷）"));
+    }
+  });
+
+  return () => es.close();
 }
 
 // ===== Modal (index.html 固定按鈕) =====
@@ -136,17 +202,36 @@ function wireModal() {
 // ===== Calendar =====
 async function loadCalendar() {
   const startEl = $("#calStart");
+  const rangeEl = $("#calRange");
+  const rangeMode = rangeEl?.value || "28";
   if (!startEl.value) {
-    const ws = startOfWeek(new Date());
+    const pm = projectMonthRange();
+    const ws = pm ? pm[0] : startOfWeek(new Date());
     startEl.value = isoDate(ws);
   }
-  const start = new Date(startEl.value + "T00:00:00");
-  const days = Array.from({ length: 7 }, (_, i) => isoDate(addDays(start, i)));
+  let start = new Date(startEl.value + "T00:00:00");
+  let days = [];
+  if (rangeMode === "month") {
+    const pm = projectMonthRange();
+    if (pm && !startEl.dataset.manual) {
+      start = pm[0];
+      startEl.value = isoDate(start);
+    }
+    const monthEnd = pm ? pm[1] : endOfMonth(start);
+    let cur = new Date(start);
+    while (cur <= monthEnd) {
+      days.push(isoDate(cur));
+      cur = addDays(cur, 1);
+    }
+  } else {
+    const span = Number(rangeMode) || 7;
+    days = Array.from({ length: span }, (_, i) => isoDate(addDays(start, i)));
+  }
 
   const [nurses, shifts, assignments] = await Promise.all([
     api("/api/master/nurses"),
     api("/api/master/shift_codes"),
-    api(`/api/calendar/assignments?project_id=${state.project.id}&start=${days[0]}&end=${days[6]}`),
+    api(`/api/calendar/assignments?project_id=${state.project.id}&start=${days[0]}&end=${days[days.length - 1]}`),
   ]);
 
   const shiftMap = new Map(shifts.map((s) => [s.code, s]));
@@ -156,7 +241,8 @@ async function loadCalendar() {
   // header
   const grid = $("#calendarGrid");
   let html = "";
-  html += `<div class="cal">`;
+  html += `<div class="calwrap">`;
+  html += `<div class="cal" style="--day-count:${days.length}">`;
   html += `<div class="cal__head">`;
   html += `<div class="cal__corner">護理師</div>`;
   for (const d of days) html += `<div class="cal__day">${esc(d)}</div>`;
@@ -328,41 +414,21 @@ function runNlToDslStream() {
   $("#dslOutput").value = "";
   $("#nlStatus").textContent = "";
 
-  const url = `/api/rules/nl_to_dsl_stream?text=${encodeURIComponent(nl || "")}`;
-  const es = new EventSource(url);
-
-  es.addEventListener("status", (e) => {
-    try {
-      const d = JSON.parse(e.data);
-      $("#nlStatus").textContent = d.message || "";
-    } catch {
-      $("#nlStatus").textContent = e.data;
-    }
-  });
-
-  es.addEventListener("token", (e) => {
-    try {
-      const d = JSON.parse(e.data);
-      $("#dslOutput").value += d.text || "";
-    } catch {
-      $("#dslOutput").value += e.data;
-    }
-  });
-
-  es.addEventListener("completed", (e) => {
-    try {
-      const d = JSON.parse(e.data);
-      if (d.dsl_text) $("#dslOutput").value = d.dsl_text;
-    } catch {
-      // ignore
-    }
-    $("#nlStatus").textContent = "完成";
-    es.close();
-  });
-
-  es.addEventListener("error", () => {
-    $("#nlStatus").textContent = "串流中斷（可能是後端錯誤或連線中斷）";
-    es.close();
+  streamNlToDsl(nl, {
+    onStatus: (msg) => {
+      $("#nlStatus").textContent = msg || "";
+    },
+    onToken: (chunk) => {
+      $("#dslOutput").value += chunk;
+    },
+    onCompleted: (dslText) => {
+      if (dslText) $("#dslOutput").value = dslText;
+      $("#nlStatus").textContent = "完成";
+    },
+    onError: (err) => {
+      $("#nlStatus").textContent = err.message;
+      toast(`轉譯失敗：${err.message}`, "bad");
+    },
   });
 }
 
@@ -381,8 +447,18 @@ async function runValidateDsl() {
 async function runDslToNl() {
   const dsl_text = $("#dslOutput").value;
   const r = await api("/api/rules/dsl_to_nl", { method: "POST", body: JSON.stringify({ dsl_text }) });
-  toast("已產生反向翻譯", "good");
-  openModal({ title: "DSL → 自然語言", bodyHtml: `<pre style="white-space:pre-wrap;margin:0;">${esc(r.text || "")}</pre>`, onOk: async () => {} });
+  toast("已產生反向翻譯", r.prompt_applied ? "good" : "info");
+  const warnings = (r.warnings || []).map((w) => `<div class="muted">${esc(w)}</div>`).join("");
+  const source = r.source ? `來源：${r.source}${r.prompt_applied ? "（套用 System Prompt）" : ""}` : "";
+  openModal({
+    title: "DSL → 自然語言",
+    bodyHtml: `
+      <pre style="white-space:pre-wrap;margin:0;">${esc(r.text || "")}</pre>
+      ${source ? `<div class="muted" style="margin-top:6px;">${esc(source)}</div>` : ""}
+      ${warnings ? `<div class="muted" style="margin-top:4px;">${warnings}</div>` : ""}
+    `,
+    onOk: async () => {},
+  });
 }
 
 async function saveRuleFromPanel() {
@@ -398,6 +474,129 @@ async function saveRuleFromPanel() {
   });
   toast("已存成規則", "good");
   await loadRules();
+}
+
+// 對話介面 + 衝突
+function renderRuleChatLog() {
+  const box = $("#ruleChatLog");
+  if (!box) return;
+  if (!state.ruleChat.length) {
+    box.innerHTML = `<div class="muted">尚未開始對話，請先輸入想調整的規則。</div>`;
+    return;
+  }
+  box.innerHTML = state.ruleChat
+    .map((m) => {
+      const role = m.role === "user" ? "使用者" : "系統 DSL";
+      const badge = `<span class="pill pill--${m.role === "user" ? "user" : "bot"}">${esc(role)}</span>`;
+      return `
+        <div class="chatmsg chatmsg--${m.role === "user" ? "user" : "bot"}">
+          <div class="chatmsg__meta">${badge}<span class="muted">${esc(m.time || "")}</span></div>
+          <pre class="chatmsg__body">${esc(m.text || "") || "(空白)"}</pre>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function setRuleChatScratch(text) {
+  state.ruleChatScratch = text || "";
+  const el = $("#ruleChatScratch");
+  if (el) el.value = state.ruleChatScratch;
+}
+
+function pushRuleChatMessage(msg) {
+  state.ruleChat.push({
+    id: msg.id || Date.now().toString(),
+    role: msg.role || "user",
+    text: msg.text || "",
+    time: msg.time || new Date().toLocaleTimeString(),
+  });
+  renderRuleChatLog();
+}
+
+function updateRuleChatMessage(id, text) {
+  const m = state.ruleChat.find((x) => String(x.id) === String(id));
+  if (m) {
+    m.text = text;
+    renderRuleChatLog();
+  }
+}
+
+function updateChatStatus(msg) {
+  const el = $("#chatStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function sendRuleChat() {
+  const input = ($("#chatInput").value || "").trim();
+  if (!input) return toast("請輸入想調整的規則描述", "warn");
+  const placeholderId = `${Date.now()}_bot`;
+  pushRuleChatMessage({ role: "user", text: input });
+  pushRuleChatMessage({ id: placeholderId, role: "bot", text: "串流中..." });
+  setRuleChatScratch("");
+  updateChatStatus("轉譯中（SSE）...");
+
+  let buffer = "";
+  streamNlToDsl(input, {
+    onStatus: (msg) => updateChatStatus(msg || "轉譯中..."),
+    onToken: (chunk) => {
+      buffer += chunk;
+      updateRuleChatMessage(placeholderId, buffer);
+      setRuleChatScratch(buffer);
+    },
+    onCompleted: (dslText) => {
+      const finalText = dslText || buffer || "(未產生 DSL)";
+      updateRuleChatMessage(placeholderId, finalText);
+      setRuleChatScratch(finalText);
+      updateChatStatus("完成，可套用到底稿");
+      toast("已完成轉譯，請檢視右側底稿。", "good");
+    },
+    onError: (err) => {
+      updateRuleChatMessage(placeholderId, `[失敗] ${err.message}`);
+      updateChatStatus(err.message);
+    },
+  });
+}
+
+function applyScratchToDsl(target) {
+  const text = state.ruleChatScratch || "";
+  if (!text) return toast("目前底稿為空，請先轉譯一段規則", "warn");
+  if (target === "editor") {
+    $("#dslOutput").value = text;
+    toast("已帶入 DSL 編輯器", "good");
+  } else if (target === "tester") {
+    $("#dslTester").value = text;
+    setView("dsl");
+    toast("已帶入 DSL 測試台", "good");
+  }
+}
+
+async function loadRuleConflicts() {
+  if (!state.project) return;
+  const wrap = $("#conflictList");
+  if (wrap) wrap.innerHTML = `<div class="muted">載入中...</div>`;
+  const params = new URLSearchParams({ project_id: state.project.id });
+  const start = $("#conflictStart")?.value;
+  const end = $("#conflictEnd")?.value;
+  if (start) params.set("start", start);
+  if (end) params.set("end", end);
+  const rows = await api(`/api/schedule/conflicts?${params.toString()}`);
+  if (!wrap) return;
+  if (!rows.length) {
+    wrap.innerHTML = `<div class="muted">目前區間內沒有規則衝突。</div>`;
+    return;
+  }
+  wrap.innerHTML = rows
+    .map(
+      (c) => `
+      <div class="conflict conflict--${esc(c.severity || "warn")}">
+        <div class="conflict__title">${esc(c.rule_title || "規則")}</div>
+        <div class="conflict__meta">${esc(c.date || "")} ${esc(c.shift_code || "")} ${esc(c.nurse_staff_no || "")}</div>
+        <div class="conflict__msg">${esc(c.message || "")}</div>
+      </div>
+    `
+    )
+    .join("");
 }
 
 // ===== Master Data =====
@@ -677,6 +876,28 @@ function initDslTester() {
   // no-op (button wired in boot)
 }
 
+function nlToDslLab() {
+  const text = $("#dslLabNl").value;
+  const statusEl = $("#dslLabNlStatus");
+  $("#dslTester").value = "";
+  statusEl.textContent = "";
+  streamNlToDsl(text, {
+    onStatus: (msg) => (statusEl.textContent = msg || ""),
+    onToken: (chunk) => {
+      $("#dslTester").value += chunk;
+    },
+    onCompleted: (dslText) => {
+      if (dslText) $("#dslTester").value = dslText;
+      statusEl.textContent = "完成";
+      setRuleChatScratch($("#dslTester").value);
+    },
+    onError: (err) => {
+      statusEl.textContent = err.message;
+      toast(`NL→DSL 串流失敗：${err.message}`, "bad");
+    },
+  });
+}
+
 async function runDslValidateOnly() {
   const dsl_text = $("#dslTester").value;
   const r = await api("/api/rules/validate", { method: "POST", body: JSON.stringify({ dsl_text }) });
@@ -690,6 +911,30 @@ async function runDslValidateOnly() {
   }
 }
 
+async function runDslLabReverse() {
+  const payload = {
+    dsl_text: $("#dslTester").value,
+    system_prompt: $("#dslPrompt").value,
+  };
+  const r = await api("/api/rules/dsl_to_nl", { method: "POST", body: JSON.stringify(payload) });
+  const pieces = [];
+  if (r.source) pieces.push(`來源：${r.source}`);
+  if (r.prompt_applied) pieces.push("已套用 System Prompt");
+  const statusLine = pieces.join(" · ");
+  $("#dslTesterStatus").textContent = statusLine || "";
+  const warnLine = (r.warnings || []).join("；");
+  if (warnLine) $("#dslTesterStatus").textContent += (statusLine ? "；" : "") + warnLine;
+  openModal({
+    title: "反向翻譯結果",
+    bodyHtml: `<pre style="white-space:pre-wrap;margin:0;">${esc(r.text || "")}</pre>`,
+    onOk: async () => {},
+  });
+}
+
+async function runDslLabValidate() {
+  await runDslValidateOnly();
+}
+
 // ===== Boot =====
 async function boot() {
   wireModal();
@@ -700,6 +945,10 @@ async function boot() {
 
   // calendar
   $("#btnLoadCalendar").addEventListener("click", () => loadCalendar().catch((e) => toast(`載入失敗：${e.message}`, "bad")));
+  $("#calRange")?.addEventListener("change", () => loadCalendar().catch((e) => toast(`載入失敗：${e.message}`, "bad")));
+  $("#calStart")?.addEventListener("change", () => {
+    $("#calStart").dataset.manual = "1";
+  });
 
   // rules actions
   $("#btnNlToDsl").addEventListener("click", runNlToDslStream);
@@ -707,6 +956,16 @@ async function boot() {
   $("#btnDslToNl").addEventListener("click", () => runDslToNl().catch((e) => toast(`反向翻譯失敗：${e.message}`, "bad")));
   $("#btnSaveRule").addEventListener("click", () => saveRuleFromPanel().catch((e) => toast(`儲存失敗：${e.message}`, "bad")));
   $("#btnReloadRules").addEventListener("click", () => loadRules().catch((e) => toast(`載入失敗：${e.message}`, "bad")));
+  $("#btnChatSend").addEventListener("click", sendRuleChat);
+  $("#btnChatApplyToDsl").addEventListener("click", () => applyScratchToDsl("editor"));
+  $("#btnScratchToDsl").addEventListener("click", () => applyScratchToDsl("editor"));
+  $("#btnScratchToTester").addEventListener("click", () => applyScratchToDsl("tester"));
+  $("#btnReloadConflicts").addEventListener("click", () => loadRuleConflicts().catch((e) => toast(`衝突載入失敗：${e.message}`, "bad")));
+  $("#ruleChatScratch").addEventListener("input", (e) => {
+    state.ruleChatScratch = e.target.value;
+  });
+  renderRuleChatLog();
+  setRuleChatScratch(state.ruleChatScratch);
 
   // master tabs
   $$(".tab").forEach((t) => {
@@ -726,11 +985,19 @@ async function boot() {
 
   // dsl tester
   $("#btnDslValidateOnly").addEventListener("click", () => runDslValidateOnly().catch((e) => toast(`驗證失敗：${e.message}`, "bad")));
+  $("#btnDslLabNlToDsl").addEventListener("click", nlToDslLab);
+  $("#btnDslLabDslToNl").addEventListener("click", () => runDslLabReverse().catch((e) => toast(`反向翻譯失敗：${e.message}`, "bad")));
+  $("#btnDslLabValidate").addEventListener("click", () => runDslLabValidate().catch((e) => toast(`驗證失敗：${e.message}`, "bad")));
 
   // project pill
   try {
     state.project = await api("/api/projects/current");
     $("#projectPill").textContent = `專案：${state.project.name}（${state.project.month}）`;
+    const pm = projectMonthRange();
+    if (pm) {
+      $("#conflictStart").value = isoDate(pm[0]);
+      $("#conflictEnd").value = isoDate(pm[1]);
+    }
   } catch (e) {
     $("#projectPill").textContent = "專案載入失敗";
     toast(`專案載入失敗：${e.message}`, "bad");
