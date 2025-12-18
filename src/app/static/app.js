@@ -26,7 +26,7 @@ async function api(path, opts = {}) {
   const payload = await res.json().catch(() => null);
   if (!payload) throw new Error(`回應不是 JSON（${res.status}）`);
   if (!res.ok || payload.ok === false) {
-    const msg = payload.error || payload.detail || `HTTP ${res.status}`;
+    const msg = (payload.error && (payload.error.message || payload.error.code)) || payload.error || payload.detail || `HTTP ${res.status}`;
     throw new Error(msg);
   }
   return payload.data;
@@ -553,7 +553,7 @@ async function loadOptimization() {
 }
 
 async function loadJobs() {
-  const rows = await api(`/api/optim/jobs?project_id=${state.project.id}`);
+  const rows = await api(`/optimization/jobs?project_id=${state.project.id}`);
   const tbody = $("#jobsTable tbody");
   tbody.innerHTML = rows
     .map((j) => {
@@ -579,9 +579,9 @@ async function loadJobs() {
 }
 
 async function createAndRunJob() {
-  const job = await api("/api/optim/jobs", {
+  const job = await api("/optimization/jobs", {
     method: "POST",
-    body: JSON.stringify({ project_id: state.project.id }),
+    body: JSON.stringify({ project_id: state.project.id, plan_id: String(state.project.id || "") }),
   });
   toast(`已建立 Job #${job.id}`, "good");
   await loadJobs();
@@ -596,35 +596,52 @@ function runJobStream(jobId) {
   statusEl.textContent = `執行中（Job #${jobId}）...`;
   barEl.style.width = "0%";
 
-  const es = new EventSource(`/api/optim/jobs/${jobId}/stream`);
+  const es = new EventSource(`/optimization/jobs/${jobId}/stream`);
 
   const pushLog = (line) => {
     logEl.textContent += line + "\n";
     logEl.scrollTop = logEl.scrollHeight;
   };
 
-  es.addEventListener("status", (e) => {
+  es.addEventListener("phase", (e) => {
     try {
       const d = JSON.parse(e.data);
-      if (d.message) statusEl.textContent = d.message;
+      const phaseMap = {
+        compile_start: "開始解析規則與輸入...",
+        compile_done: "編譯完成，準備求解...",
+        solve_start: "開始求解...",
+        solve_done: "求解完成，準備寫入...",
+        persist_start: "寫入資料庫...",
+        persist_done: "寫入完成",
+      };
+      if (d.phase && phaseMap[d.phase]) statusEl.textContent = phaseMap[d.phase];
+      if (d.phase) pushLog(`[${d.phase}] ${phaseMap[d.phase] || ""}`.trim());
+      if (d.report?.objective) pushLog(`目標值：${d.report.objective}`);
+    } catch {
+      pushLog(e.data);
+    }
+  });
+
+  es.addEventListener("log", (e) => {
+    try {
+      const d = JSON.parse(e.data);
       if (d.message) pushLog(d.message);
     } catch {
       pushLog(e.data);
     }
   });
 
-  es.addEventListener("progress", (e) => {
+  es.addEventListener("metric", (e) => {
     try {
       const d = JSON.parse(e.data);
       const p = Number(d.progress || 0);
-      barEl.style.width = `${Math.max(0, Math.min(100, p))}%`;
-      if (d.message) pushLog(d.message);
+      if (!Number.isNaN(p)) barEl.style.width = `${Math.max(0, Math.min(100, p))}%`;
     } catch {
       // ignore
     }
   });
 
-  es.addEventListener("completed", async (e) => {
+  es.addEventListener("result", async (e) => {
     try {
       const d = JSON.parse(e.data);
       pushLog(`完成：${d.status || ""}`);
@@ -639,9 +656,16 @@ function runJobStream(jobId) {
     toast("最佳化完成（已寫入班表）", "good");
   });
 
-  es.addEventListener("error", async () => {
-    pushLog("串流中斷（可能是後端錯誤或連線中斷）");
-    statusEl.textContent = "中斷";
+  es.addEventListener("error", async (e) => {
+    try {
+      const d = e.data ? JSON.parse(e.data) : null;
+      const msg = d?.error?.message || d?.error || "串流錯誤";
+      pushLog(msg);
+      statusEl.textContent = msg;
+    } catch {
+      pushLog("串流中斷（可能是後端錯誤或連線中斷）");
+      statusEl.textContent = "中斷";
+    }
     es.close();
     await loadJobs();
     toast("最佳化失敗或中斷（請查看 logs/）", "bad");
