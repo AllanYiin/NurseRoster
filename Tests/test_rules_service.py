@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from app.services import rules
+from app.models.entities import Department, Nurse, Project, Rule, RuleScopeType, RuleType
 
 
 def test_validate_dsl_success():
@@ -15,6 +16,7 @@ def test_validate_dsl_success():
     result = rules.validate_dsl(dsl)
     assert result["ok"] is True
     assert result["issues"] == []
+    assert result["warnings"], "缺少 dsl_version 預期會有 warning"
 
 
 def test_validate_dsl_failure_on_invalid_json():
@@ -50,3 +52,92 @@ def test_dsl_to_nl_generates_human_text():
     assert "每天 D 班至少 2 人" in text
     assert "N 班連續不得超過 1 天" in text
     assert "大夜後偏好安排休假" in text
+
+
+def test_resolve_project_rules_overrides_and_conflicts(test_context):
+    with test_context["make_session"]() as session:
+        project = Project(name="覆寫測試", month="2024-01")
+        dept = Department(code="ER", name="急診")
+        nurse = Nurse(staff_no="N001", name="王小明", department_code="ER", job_level_code="N1")
+        session.add(project)
+        session.add(dept)
+        session.add(nurse)
+        session.commit()
+        session.refresh(project)
+        session.refresh(dept)
+        session.refresh(nurse)
+
+        rule_global = Rule(
+            project_id=project.id,
+            title="全域人力",
+            scope_type=RuleScopeType.GLOBAL,
+            rule_type=RuleType.HARD,
+            priority=1,
+            dsl_text=json.dumps(
+                {
+                    "dsl_version": "sr-dsl/1.0",
+                    "constraints": [{"name": "daily_coverage", "shift": "D", "min": 2}],
+                }
+            ),
+            is_enabled=True,
+        )
+        rule_dept_relax = Rule(
+            project_id=project.id,
+            title="科別放寬",
+            scope_type=RuleScopeType.DEPARTMENT,
+            scope_id=dept.id,
+            rule_type=RuleType.HARD,
+            priority=2,
+            dsl_text=json.dumps(
+                {
+                    "dsl_version": "sr-dsl/1.0",
+                    "constraints": [{"name": "daily_coverage", "shift": "D", "min": 1}],
+                }
+            ),
+            is_enabled=True,
+        )
+        rule_soft = Rule(
+            project_id=project.id,
+            title="偏好休假",
+            scope_type=RuleScopeType.GLOBAL,
+            rule_type=RuleType.SOFT,
+            priority=1,
+            dsl_text=json.dumps(
+                {
+                    "dsl_version": "sr-dsl/1.0",
+                    "constraints": [{"name": "prefer_off_after_night", "shift": "N", "weight": 3}],
+                }
+            ),
+            is_enabled=True,
+        )
+        rule_soft_nurse = Rule(
+            project_id=project.id,
+            title="個人偏好",
+            scope_type=RuleScopeType.NURSE,
+            scope_id=nurse.id,
+            rule_type=RuleType.SOFT,
+            priority=3,
+            dsl_text=json.dumps(
+                {
+                    "dsl_version": "sr-dsl/1.0",
+                    "constraints": [{"name": "prefer_off_after_night", "shift": "N", "weight": 5}],
+                }
+            ),
+            is_enabled=True,
+        )
+        session.add(rule_global)
+        session.add(rule_dept_relax)
+        session.add(rule_soft)
+        session.add(rule_soft_nurse)
+        session.commit()
+
+        merged, conflicts = rules.resolve_project_rules(session, project.id)
+
+    coverage_rule = next((c for c in merged if c.name == "daily_coverage"), None)
+    assert coverage_rule is not None
+    assert coverage_rule.params.get("min") == 2
+    assert any("覆寫較寬鬆" in c.get("message", "") for c in conflicts)
+
+    prefer_rule = next((c for c in merged if c.name == "prefer_off_after_night"), None)
+    assert prefer_rule is not None
+    assert prefer_rule.weight == 5
