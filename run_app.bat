@@ -40,7 +40,7 @@ if not "%BACKEND_HOST%"=="" set APP_HOST=%BACKEND_HOST%
 if not "%BACKEND_PORT%"=="" set APP_PORT=%BACKEND_PORT%
 
 echo [4/4] 啟動應用服務 (CTRL+C 可結束)...
-pushd "%PROJECT_ROOT%"
+pushd "%PROJECT_ROOT%backend"
 python -m app
 set EXIT_CODE=%ERRORLEVEL%
 popd

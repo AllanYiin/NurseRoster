@@ -28,6 +28,8 @@ MODULE_ENTRY_CANDIDATES = [
     "backend/app.py",
     "backend/run_server.py",
     "backend/__main__.py",
+    "backend/app/__main__.py",
+    "backend/app/main.py",
 ]
 
 KNOWN_PACKAGE_ROOTS = ("src", "backend", "app")
@@ -66,6 +68,7 @@ STATIC_SITE_DIR_CANDIDATES = [
     "dist",
     "build",
     "public",
+    "frontend/public",
     "frontend/dist",
     "frontend/build",
     "web/dist",
