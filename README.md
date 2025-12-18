@@ -18,3 +18,8 @@
 - 全域啟動時會初始化 `logs/app.log`（INFO 級別，同步輸出到 console）。
 - 主程式入口、SSE/WS 轉譯流程、最佳化任務皆加上 try-except，將技術細節記錄於 log 檔，不回傳敏感資訊給前端。
 - 可透過 `LOG_DIR` 自訂 log 位置，確保與 SQLite 同樣置於 Zeabur 的持久化磁碟中。
+
+## Windows 一鍵啟動
+- 在專案根目錄直接執行 `run_app.bat`。
+- 腳本會自動建立 `.venv`、安裝 `requirements.txt`，並以 `python -m app` 啟動服務。
+- 如需自訂位址或埠號，可在執行前設定 `APP_HOST`、`APP_PORT` 環境變數。
