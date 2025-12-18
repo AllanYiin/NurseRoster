@@ -141,16 +141,28 @@ def parse_env_file(env_path: Path) -> Dict[str, str]:
     return out
 
 def get_launcher_config(root: Path) -> Dict[str, str]:
-    # precedence: OS env > .launcher.env
-    file_cfg = parse_env_file(root / ".launcher.env")
-    cfg = dict(file_cfg)
+    # precedence: OS env > .launcher.env > .env
+    env_cfg = parse_env_file(root / ".env")
+    launcher_cfg = parse_env_file(root / ".launcher.env")
+    cfg: Dict[str, str] = {}
+    cfg.update(env_cfg)
+    cfg.update(launcher_cfg)
     for k, v in os.environ.items():
         if k in {
-            "BACKEND_HOST", "BACKEND_PORT", "UVICORN_TARGET",
-            "FRONTEND_HOST", "FRONTEND_PORT",
+            "BACKEND_HOST", "BACKEND_PORT", "UVICORN_TARGET", "BACKEND_START", "APP_START",
+            "FRONTEND_HOST", "FRONTEND_PORT", "APP_HOST", "APP_PORT",
             "STATIC_HOST", "STATIC_PORT",
         }:
             cfg[k] = v
+    # compatibility: APP_HOST/APP_PORT <-> BACKEND_HOST/BACKEND_PORT
+    if not cfg.get("BACKEND_HOST") and cfg.get("APP_HOST"):
+        cfg["BACKEND_HOST"] = cfg["APP_HOST"]
+    if not cfg.get("BACKEND_PORT") and cfg.get("APP_PORT"):
+        cfg["BACKEND_PORT"] = cfg["APP_PORT"]
+    if cfg.get("BACKEND_HOST") and not cfg.get("APP_HOST"):
+        cfg["APP_HOST"] = cfg["BACKEND_HOST"]
+    if cfg.get("BACKEND_PORT") and not cfg.get("APP_PORT"):
+        cfg["APP_PORT"] = cfg["BACKEND_PORT"]
     return cfg
 
 # ============================================================
@@ -450,6 +462,30 @@ def infer_uvicorn_target_from_code(root: Path) -> Optional[str]:
     items.sort(key=score)
     return items[0][0]
 
+def parse_backend_start_override(cfg: Dict[str, str]) -> Optional[dict]:
+    start_val = cfg.get("BACKEND_START") or cfg.get("APP_START")
+    if not start_val:
+        return None
+    raw = start_val.strip()
+    notes = [f"Detected BACKEND_START/APP_START override: {raw}"]
+
+    target, host, port = detect_uvicorn_from_text(raw)
+    if target:
+        return {"mode": "uvicorn", "target": target, "host": host, "port": port, "notes": notes}
+
+    if re.match(r"^[A-Za-z0-9_.]+:[A-Za-z0-9_]+$", raw):
+        return {"mode": "uvicorn", "target": raw, "host": None, "port": None, "notes": notes}
+
+    m = re.search(r"""(?i)python\s+-m\s+(?P<module>[A-Za-z0-9_\.]+)""", raw)
+    if m:
+        mod = m.group("module")
+        return {"mode": "module", "module": mod, "notes": notes}
+
+    if re.match(r"^[A-Za-z0-9_\.]+$", raw):
+        return {"mode": "module", "module": raw, "notes": notes}
+
+    return None
+
 def detect_backend_mode(root: Path, cfg: Dict[str, str]) -> dict:
     """
     返回 dict:
@@ -458,6 +494,11 @@ def detect_backend_mode(root: Path, cfg: Dict[str, str]) -> dict:
       streamlit fallback
     """
     notes: List[str] = []
+
+    override = parse_backend_start_override(cfg)
+    if override:
+        override["notes"] = notes + override.get("notes", [])
+        return override
 
     # 0) user-specified override (env/.launcher.env)
     if cfg.get("UVICORN_TARGET"):
