@@ -47,7 +47,11 @@ def _next_version(session: Session, rule_id: int) -> int:
 
 
 def _validation_status(result: dict) -> ValidationStatus:
-    return ValidationStatus.PASS if result.get("ok") else ValidationStatus.FAIL
+    if not result.get("ok"):
+        return ValidationStatus.FAIL
+    if result.get("warnings"):
+        return ValidationStatus.WARN
+    return ValidationStatus.PASS
 
 
 @router.get("", response_model=None)
@@ -99,9 +103,9 @@ def list_rule_versions(rule_id: int, s: Session = Depends(db_session)):
 
 @router.post("/{rule_id}/versions:from_dsl")
 def create_rule_version_from_dsl(rule_id: int, payload: RuleVersionFromDsl, s: Session = Depends(db_session)):
-    _ensure_rule(s, rule_id)
+    rule = _ensure_rule(s, rule_id)
     version = _next_version(s, rule_id)
-    validation = validate_dsl(payload.dsl_text)
+    validation = validate_dsl(payload.dsl_text, session=s, rule=rule)
     status = _validation_status(validation)
     rv = RuleVersion(
         rule_id=rule_id,
@@ -127,6 +131,31 @@ def create_rule_version_from_nl(rule_id: int, payload: NLReq):
     def _stream():
         collected: List[str] = []
         final_text = ""
+        version_id: int | None = None
+        draft_version_no: int | None = None
+
+        # 建立草稿版本
+        with get_session() as session:
+            rule = session.get(Rule, rule_id)
+            if not rule:
+                yield sse_event("error", {"message": "找不到規則"})
+                return
+            draft_version_no = _next_version(session, rule_id)
+            draft = RuleVersion(
+                rule_id=rule_id,
+                version=draft_version_no,
+                nl_text=payload.text,
+                validation_status=ValidationStatus.PENDING,
+                validation_report={"issues": ["尚未完成轉譯"], "warnings": []},
+            )
+            session.add(draft)
+            session.commit()
+            session.refresh(draft)
+            version_id = draft.id
+
+        if version_id:
+            yield sse_event("draft", {"rule_version_id": version_id, "version": draft_version_no, "status": ValidationStatus.PENDING.value})
+
         for event, chunk in stream_nl_to_dsl_events(payload.text):
             if event == "token":
                 collected.append(chunk.get("text", ""))
@@ -136,25 +165,44 @@ def create_rule_version_from_nl(rule_id: int, payload: NLReq):
 
         dsl_text = final_text or "".join(collected)
         if not dsl_text:
+            if version_id:
+                with get_session() as session:
+                    rv = session.get(RuleVersion, version_id)
+                    if rv:
+                        rv.validation_status = ValidationStatus.FAIL
+                        rv.validation_report = {"issues": ["未產出 DSL"], "warnings": []}
+                        session.add(rv)
+                        session.commit()
             return
+
         with get_session() as session:
             rule = session.get(Rule, rule_id)
             if not rule:
                 return
-            version = _next_version(session, rule_id)
-            validation = validate_dsl(dsl_text)
+            validation = validate_dsl(dsl_text, session=session, rule=rule)
             status = _validation_status(validation)
-            rv = RuleVersion(
-                rule_id=rule_id,
-                version=version,
-                nl_text=payload.text,
-                dsl_text=dsl_text,
-                reverse_translation=dsl_to_nl(dsl_text),
-                validation_status=status,
-                validation_report=validation,
-            )
+            reverse = dsl_to_nl(dsl_text)
+            rv = session.get(RuleVersion, version_id) if version_id else None
+            if rv is None:
+                version = _next_version(session, rule_id)
+                rv = RuleVersion(rule_id=rule_id, version=version)
+            rv.nl_text = payload.text
+            rv.dsl_text = dsl_text
+            rv.reverse_translation = reverse
+            rv.validation_status = status
+            rv.validation_report = validation
             session.add(rv)
             session.commit()
+
+        yield sse_event(
+            "validated",
+            {
+                "rule_version_id": version_id,
+                "status": status.value,
+                "issues": validation.get("issues", []),
+                "warnings": validation.get("warnings", []),
+            },
+        )
 
     return StreamingResponse(_stream(), media_type="text/event-stream")
 
@@ -196,8 +244,10 @@ def reverse_translate(dsl_text: str):
 
 
 @router.post("/validate")
-def api_validate(payload: dict):
-    return ok(validate_dsl(payload.get("dsl_text", "")))
+def api_validate(payload: dict, s: Session = Depends(db_session)):
+    rule_id = payload.get("rule_id")
+    rule = s.get(Rule, int(rule_id)) if rule_id else None
+    return ok(validate_dsl(payload.get("dsl_text", ""), session=s, rule=rule))
 
 
 @router.post("/{rule_id}/activate/{version_id}")

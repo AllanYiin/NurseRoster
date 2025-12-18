@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from calendar import monthrange
 from datetime import date as dt_date, datetime, timedelta
 from typing import Dict, List, Optional
@@ -10,8 +9,9 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.api.deps import db_session
-from app.models.entities import Assignment, Project, Rule, RuleType, SchedulePeriod
+from app.models.entities import Assignment, Project, Rule, SchedulePeriod
 from app.schemas.common import ok
+from app.services.rules import resolve_project_rules
 
 router = APIRouter(prefix="/api/schedule", tags=["schedule"])
 
@@ -49,23 +49,6 @@ def _project_date_range(session: Session, project: Project, start: Optional[dt_d
     except Exception:
         today = dt_date.today()
         return start or today, end or today
-
-
-def _parse_constraints(rule: Rule) -> List[dict]:
-    try:
-        obj = json.loads(rule.dsl_text or "{}")
-    except Exception:
-        return []
-    constraints = obj.get("constraints") or obj.get("constraint") or []
-    if isinstance(constraints, dict):
-        constraints = [constraints]
-    return [c for c in constraints if isinstance(c, dict)]
-
-
-def _severity(rule: Rule) -> str:
-    return "error" if rule.rule_type == RuleType.HARD else "warn"
-
-
 def _collect_assignments(session: Session, project_id: int, start: dt_date, end: dt_date) -> List[Assignment]:
     return session.exec(
         select(Assignment).where(Assignment.project_id == project_id, Assignment.day >= start, Assignment.day <= end)
@@ -128,75 +111,88 @@ def list_conflicts(project_id: int, start: Optional[dt_date] = None, end: Option
 
     conflicts: List[Conflict] = []
     rules = session.exec(select(Rule).where(Rule.project_id == project_id, Rule.is_enabled == True)).all()  # noqa: E712
+    rule_map = {r.id: r for r in rules if r.id}
 
-    for rule in rules:
-        constraints = _parse_constraints(rule)
-        for c in constraints:
-            name = (c.get("name") or c.get("constraint") or c.get("type") or "").strip()
-            if name == "daily_coverage":
-                shift_code = str(c.get("shift") or "").strip()
-                min_count = int(c.get("min") or 0)
-                if not shift_code or min_count <= 0:
-                    continue
-                for d in all_dates:
-                    actual = sum(1 for a in assignments_by_date.get(d, []) if a.shift_code == shift_code)
-                    if actual < min_count:
-                        conflicts.append(
-                            Conflict(
-                                rule_id=rule.id,
-                                rule_title=rule.title,
-                                severity=_severity(rule),
-                                message=f"{d} {shift_code} 班人數 {actual} 小於需求 {min_count}",
-                                date=d,
-                                shift_code=shift_code,
-                            )
+    merged_constraints, merge_conflicts = resolve_project_rules(session, project_id)
+    for mc in merge_conflicts:
+        rid = mc.get("rule_id")
+        conflicts.append(
+            Conflict(
+                rule_id=rid,
+                rule_title=rule_map.get(rid).title if rid in rule_map else "規則覆寫衝突",
+                severity="error",
+                message=f"硬性規則覆寫衝突：{mc.get('message')}",
+            )
+        )
+
+    for constraint in merged_constraints:
+        name = (constraint.name or "").strip()
+        severity = "error" if constraint.category == "hard" else "warn"
+        rule_title = rule_map.get(constraint.rule_id).title if constraint.rule_id in rule_map else ""
+        if name == "daily_coverage":
+            shift_code = (constraint.shift_code or "").strip()
+            min_count = int(constraint.params.get("min") or 0)
+            if not shift_code or min_count <= 0:
+                continue
+            for d in all_dates:
+                actual = sum(1 for a in assignments_by_date.get(d, []) if a.shift_code == shift_code)
+                if actual < min_count:
+                    conflicts.append(
+                        Conflict(
+                            rule_id=constraint.rule_id,
+                            rule_title=rule_title,
+                            severity=severity,
+                            message=f"{d} {shift_code} 班人數 {actual} 小於需求 {min_count}",
+                            date=d,
+                            shift_code=shift_code,
                         )
-            elif name == "max_consecutive":
-                shift_code = str(c.get("shift") or "").strip()
-                max_days = int(c.get("max_days") or c.get("max") or 0)
-                if not shift_code or max_days <= 0:
-                    continue
-                for nurse in nurse_ids:
-                    streak = 0
-                    for d in all_dates:
-                        assigned = assignments_by_pair.get((nurse, d))
-                        if assigned and assigned.shift_code == shift_code:
-                            streak += 1
-                            if streak > max_days:
-                                conflicts.append(
-                                    Conflict(
-                                        rule_id=rule.id,
-                                        rule_title=rule.title,
-                                        severity=_severity(rule),
-                                        message=f"{nurse} 連續 {shift_code} 已超過 {max_days} 天",
-                                        date=d,
-                                        nurse_staff_no=nurse,
-                                        shift_code=shift_code,
-                                    )
+                    )
+        elif name == "max_consecutive":
+            shift_code = (constraint.shift_code or "").strip()
+            max_days = int(constraint.params.get("max_days") or constraint.params.get("max") or 0)
+            if not shift_code or max_days <= 0:
+                continue
+            for nurse in nurse_ids:
+                streak = 0
+                for d in all_dates:
+                    assigned = assignments_by_pair.get((nurse, d))
+                    if assigned and assigned.shift_code == shift_code:
+                        streak += 1
+                        if streak > max_days:
+                            conflicts.append(
+                                Conflict(
+                                    rule_id=constraint.rule_id,
+                                    rule_title=rule_title,
+                                    severity=severity,
+                                    message=f"{nurse} 連續 {shift_code} 已超過 {max_days} 天",
+                                    date=d,
+                                    nurse_staff_no=nurse,
+                                    shift_code=shift_code,
                                 )
-                        else:
-                            streak = 0
-            elif name == "prefer_off_after_night":
-                night_code = str(c.get("shift") or "N").strip() or "N"
-                off_code = str(c.get("off_code") or "OFF").strip() or "OFF"
-                for nurse in nurse_ids:
-                    for idx in range(len(all_dates) - 1):
-                        d = all_dates[idx]
-                        d2 = all_dates[idx + 1]
-                        a1 = assignments_by_pair.get((nurse, d))
-                        a2 = assignments_by_pair.get((nurse, d2))
-                        if a1 and a1.shift_code == night_code:
-                            if not a2 or a2.shift_code != off_code:
-                                conflicts.append(
-                                    Conflict(
-                                        rule_id=rule.id,
-                                        rule_title=rule.title,
-                                        severity="warn",
-                                        message=f"{nurse} {d} 夜班後未安排 {off_code}",
-                                        date=d2,
-                                        nurse_staff_no=nurse,
-                                        shift_code=off_code,
-                                    )
+                            )
+                    else:
+                        streak = 0
+        elif name == "prefer_off_after_night":
+            night_code = str(constraint.params.get("shift") or constraint.shift_code or "N").strip() or "N"
+            off_code = str(constraint.params.get("off_code") or "OFF").strip() or "OFF"
+            for nurse in nurse_ids:
+                for idx in range(len(all_dates) - 1):
+                    d = all_dates[idx]
+                    d2 = all_dates[idx + 1]
+                    a1 = assignments_by_pair.get((nurse, d))
+                    a2 = assignments_by_pair.get((nurse, d2))
+                    if a1 and a1.shift_code == night_code:
+                        if not a2 or a2.shift_code != off_code:
+                            conflicts.append(
+                                Conflict(
+                                    rule_id=constraint.rule_id,
+                                    rule_title=rule_title,
+                                    severity="warn",
+                                    message=f"{nurse} {d} 夜班後未安排 {off_code}",
+                                    date=d2,
+                                    nurse_staff_no=nurse,
+                                    shift_code=off_code,
                                 )
+                            )
 
     return ok([c.model_dump() for c in conflicts])

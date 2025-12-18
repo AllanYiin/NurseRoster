@@ -10,8 +10,9 @@ from typing import Dict, Generator, List, Tuple
 from sqlmodel import Session, select
 
 from app.db.session import get_session
-from app.models.entities import Assignment, JobStatus, Nurse, OptimizationJob, Project, ProjectSnapshot, Rule, ShiftCode
+from app.models.entities import Assignment, JobStatus, Nurse, OptimizationJob, Project, ProjectSnapshot, ShiftCode
 from app.schemas.common import err
+from app.services.rules import resolve_project_rules
 
 logger = logging.getLogger(__name__)
 
@@ -111,40 +112,27 @@ def _parse_enabled_rules(session: Session, project_id: int) -> dict:
         "coverage": {},
         "max_consecutive": {},
         "prefer_off_after_night": 0,
+        "conflicts": [],
     }
 
-    rules = session.exec(select(Rule).where(Rule.project_id == project_id, Rule.is_enabled == True)).all()  # noqa: E712
-    for r in rules:
-        dsl_text = (r.dsl_text or "").strip()
-        if not dsl_text:
-            continue
-        try:
-            obj = json.loads(dsl_text)
-            constraints = obj.get("constraints") or obj.get("constraint") or []
-            if isinstance(constraints, dict):
-                constraints = [constraints]
-            if not isinstance(constraints, list):
-                continue
-            for c in constraints:
-                if not isinstance(c, dict):
-                    continue
-                name = c.get("name") or c.get("constraint") or c.get("type")
-                if name == "daily_coverage":
-                    shift = str(c.get("shift") or "").strip()
-                    mn = int(c.get("min") or 0)
-                    if shift and mn > 0:
-                        conf["coverage"][shift] = max(conf["coverage"].get(shift, 0), mn)
-                elif name == "max_consecutive":
-                    shift = str(c.get("shift") or "").strip()
-                    mx = int(c.get("max_days") or 0)
-                    if shift and mx > 0:
-                        conf["max_consecutive"][shift] = min(conf["max_consecutive"].get(shift, mx), mx)
-                elif name == "prefer_off_after_night":
-                    w = int(c.get("weight") or c.get("penalty") or 1)
-                    conf["prefer_off_after_night"] = max(conf["prefer_off_after_night"], w)
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("規則 DSL 解析失敗，已忽略（rule_id=%s）：%s", getattr(r, "id", None), exc)
-            continue
+    merged_constraints, conflicts = resolve_project_rules(session, project_id)
+    conf["conflicts"] = conflicts
+
+    for c in merged_constraints:
+        if c.name == "daily_coverage":
+            shift = (c.shift_code or "").strip()
+            mn = int(c.params.get("min") or 0)
+            if shift and mn > 0:
+                conf["coverage"][shift] = max(conf["coverage"].get(shift, 0), mn)
+        elif c.name == "max_consecutive":
+            shift = (c.shift_code or "").strip()
+            mx = int(c.params.get("max_days") or 0)
+            if shift and mx > 0:
+                current = conf["max_consecutive"].get(shift, mx)
+                conf["max_consecutive"][shift] = min(current, mx)
+        elif c.name == "prefer_off_after_night":
+            w = int(c.weight or c.params.get("weight") or 1)
+            conf["prefer_off_after_night"] = max(conf["prefer_off_after_night"], w)
 
     return conf
 
@@ -342,7 +330,7 @@ def stream_job_run(job_id: int) -> Generator[str, None, None]:
             project = s.get(Project, job.project_id) if job.project_id else None
             nurses = s.exec(select(Nurse).where(Nurse.is_active == True).order_by(Nurse.staff_no)).all()  # noqa: E712
             shift_rows = s.exec(select(ShiftCode).where(ShiftCode.is_active == True).order_by(ShiftCode.code)).all()  # noqa: E712
-            rules_conf = _parse_enabled_rules(s, job.project_id or 0)
+        rules_conf = _parse_enabled_rules(s, job.project_id or 0)
 
         if not project:
             yield from _fail_job(job_id, "VALIDATION", "找不到對應的計畫/專案")
@@ -370,6 +358,7 @@ def stream_job_run(job_id: int) -> Generator[str, None, None]:
             "n_shifts": len(shift_codes),
             "coverage": coverage,
             "max_consecutive": max_consecutive,
+            "rule_conflicts": rules_conf.get("conflicts") or [],
         }
         with get_session() as s:
             job = s.get(OptimizationJob, job_id)
@@ -380,6 +369,17 @@ def stream_job_run(job_id: int) -> Generator[str, None, None]:
                 job.updated_at = datetime.utcnow()
                 s.add(job)
                 s.commit()
+
+        if rules_conf.get("conflicts"):
+            yield sse_event(
+                "log",
+                {
+                    "level": "warning",
+                    "stage": "compile",
+                    "message": "偵測到硬性規則覆寫衝突，已保留較嚴格設定。",
+                    "conflicts": rules_conf.get("conflicts"),
+                },
+            )
 
         yield sse_event("phase", {"phase": "compile_done", "job_id": job_id, "report": compile_report})
         _check_cancel(job_id)
