@@ -30,7 +30,9 @@ class ValidationStatus(str, Enum):
 
 class JobStatus(str, Enum):
     QUEUED = "QUEUED"
-    RUNNING = "RUNNING"
+    COMPILING = "COMPILING"
+    SOLVING = "SOLVING"
+    PERSISTING = "PERSISTING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     CANCELED = "CANCELED"
@@ -179,14 +181,28 @@ class OptimizationJob(SQLModel, table=True):
     model_config = {"use_enum_values": True}
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    project_id: int = Field(index=True)
+    project_id: Optional[int] = Field(default=None, index=True)
+    plan_id: Optional[str] = Field(default=None, index=True)
+    base_version_id: Optional[str] = Field(default=None, index=True)
     status: JobStatus = Field(
         default=JobStatus.QUEUED,
         sa_column=Column(SAEnum(JobStatus, native_enum=False), index=True),
     )
     progress: int = 0
+    mode: str = "strict_hard"
+    respect_locked: bool = True
+    time_limit_seconds: Optional[int] = 0
+    random_seed: Optional[int] = None
+    solver_threads: Optional[int] = None
     parameters: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    request_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    compile_report_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    solve_report_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
     result_assignment_set_id: Optional[int] = Field(default=None, index=True)
+    result_version_id: Optional[str] = Field(default=None, index=True)
+    error_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
     message: str = ""

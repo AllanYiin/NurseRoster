@@ -65,6 +65,7 @@ def create_app() -> FastAPI:
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": "系統發生錯誤，請稍後再試。如持續發生請提供時間點給管理員。",
+                    "details": {},
                 },
             },
         )
