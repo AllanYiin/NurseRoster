@@ -6,8 +6,23 @@
   - `DATA_DIR=/data`（會自動建 `logs`、`exports`）
   - `LOG_DIR=/data/logs`
   - `DB_PATH=/data/app.db`
-- **容器啟動參數**：後端以 `python -m app` 啟動，請在 Zeabur 服務環境中設定 `APP_HOST=0.0.0.0`、`APP_PORT=8000` 並開啟健康檢查 `/api/health`。
+- **容器啟動參數**：後端以 `python -m app` 啟動，請在 Zeabur 服務環境中設定 `BACKEND_HOST=0.0.0.0`、`BACKEND_PORT=8000`（也會向下相容 `APP_HOST`/`APP_PORT`），並開啟健康檢查 `/api/health`。
 - **網路路由**：前端呼叫後端時，請在環境變數或前端設定中指向後端公開 URL（HTTPS）。SSE 與 WebSocket 均需允許跨站（Zeabur 反向代理會自動處理 `Connection: keep-alive`/`upgrade`）。
+
+## 目錄結構與環境變數
+```
+project-root/
+├─ src/
+│  ├─ app/          # 後端程式與模板
+│  └─ tests/        # 後端測試
+├─ .env.example     # 請依需求複製為 .env
+├─ requirements.txt
+└─ run_app.bat
+```
+
+- 服務埠統一以 `.env` 管理：`BACKEND_HOST`、`BACKEND_PORT`（預設 127.0.0.1:8000）。
+- `run_app.bat` 與程式本體都優先讀取 `BACKEND_HOST`/`BACKEND_PORT`，並對舊版 `APP_HOST`/`APP_PORT` 保持相容。
+- `src/app/core/config.py` 會在啟動時解析根目錄 `.env`（內建解析器），請依 `.env.example` 建立。
 
 ## LLM Streaming 方案
 - 主要通道採用 **SSE**（`GET /api/rules/nl_to_dsl_stream?text=...`）。
@@ -22,4 +37,4 @@
 ## Windows 一鍵啟動
 - 在專案根目錄直接執行 `run_app.bat`。
 - 腳本會自動建立 `.venv`、安裝 `requirements.txt`，並以 `python -m app` 啟動服務。
-- 如需自訂位址或埠號，可在執行前設定 `APP_HOST`、`APP_PORT` 環境變數。
+- 如需自訂位址或埠號，可在執行前設定 `BACKEND_HOST`、`BACKEND_PORT`（亦支援相容的 `APP_HOST`、`APP_PORT`）環境變數。
