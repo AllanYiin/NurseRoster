@@ -19,7 +19,9 @@ jobs:
 
       - name: Verify required top-level files
         run: |
-          for file in README.md requirements.txt project_launcher.py run_app.bat .env.example; do
+          REQUIRED_FILES=(README.md LICENSE requirements.txt requirement.txt project_launcher.py projectlauncher.py run_app.bat runapp.bat .env.example .env)
+
+          for file in "${REQUIRED_FILES[@]}"; do
             if [ ! -f "$file" ]; then
               echo "Missing required file: $file" >&2
               exit 1
@@ -40,7 +42,9 @@ jobs:
             --exclude "dist" --exclude "build" \
             --exclude "node_modules"
 
-          if [ -f "$ARCHIVE_ROOT/.env.example" ]; then
+          if [ -f "$ARCHIVE_ROOT/.env" ]; then
+            echo "Existing .env detected in archive; keeping as-is."
+          elif [ -f "$ARCHIVE_ROOT/.env.example" ]; then
             cp "$ARCHIVE_ROOT/.env.example" "$ARCHIVE_ROOT/.env"
           else
             echo "Missing .env.example in archive root" >&2

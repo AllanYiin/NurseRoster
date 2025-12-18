@@ -1,0 +1,2 @@
+# Alias requirement file to keep compatibility with tooling expecting requirement.txt
+-r requirements.txt

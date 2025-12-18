@@ -14,5 +14,6 @@ logs/
 exports/
 
 # Environment files
-.env
+# Keep the root .env committed for CI checks; ignore local overrides.
 .env.local
+.env.*.local

@@ -12,6 +12,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify required root files
+        run: |
+          REQUIRED_FILES=(README.md LICENSE requirements.txt requirement.txt project_launcher.py projectlauncher.py run_app.bat runapp.bat .env.example .env)
+
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "Missing required file: $file" >&2
+              exit 1
+            fi
+          done
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
