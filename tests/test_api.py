@@ -11,6 +11,7 @@ class ApiSmokeTest(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         db_path = os.path.join(self.tmpdir.name, "test.db")
         os.environ["DB_PATH"] = db_path
+        os.environ["SKIP_SEED"] = "1"
 
         # import after env set
         from app.main import create_app

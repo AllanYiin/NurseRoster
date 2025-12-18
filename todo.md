@@ -1,9 +1,9 @@
 # TODO
 
 ## 0. 基礎準備（技術可行性與環境）
-- [ ] 確認 Zeabur 佈署策略：前後端分離、Backend 容器綁定 SQLite 持久化磁碟。
-- [ ] 制定 LLM streaming 方案：SSE 為主，fallback WebSocket；無金鑰時啟用可選 mock。
-- [ ] Logging 與例外處理：主程式入口全域 try-except，關鍵 I/O/網路/推論加入防崩潰保護，logs/ 下分級日誌（避免敏感資訊）。
+- [x] 確認 Zeabur 佈署策略：前後端分離、Backend 容器綁定 SQLite 持久化磁碟。
+- [x] 制定 LLM streaming 方案：SSE 為主，fallback WebSocket；無金鑰時啟用可選 mock。
+- [x] Logging 與例外處理：主程式入口全域 try-except，關鍵 I/O/網路/推論加入防崩潰保護，logs/ 下分級日誌（避免敏感資訊）。
 
 ## 1. 資料模型與種子
 - [ ] 以 SQLAlchemy/SQLModel 建立核心表：users、nurses、departments、shift_codes、skill_codes、schedule_periods、assignments、rules、rule_versions、optimization_jobs、projects、project_snapshots。

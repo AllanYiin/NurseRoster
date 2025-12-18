@@ -22,21 +22,21 @@ def list_departments(s: Session = Depends(db_session)):
 
 @router.post("/departments")
 def upsert_department(dep: Department, s: Session = Depends(db_session)):
+    obj = None
     if dep.id:
         obj = s.get(Department, dep.id)
-        if not obj:
-            _not_found()
+    if obj is None and dep.code:
+        obj = s.exec(select(Department).where(Department.code == dep.code)).first()
+    if obj is None:
+        obj = Department(code=dep.code, name=dep.name, is_active=dep.is_active)
+    else:
         obj.code = dep.code
         obj.name = dep.name
         obj.is_active = dep.is_active
-        s.add(obj)
-        s.commit()
-        s.refresh(obj)
-        return ok(obj.model_dump())
-    s.add(dep)
+    s.add(obj)
     s.commit()
-    s.refresh(dep)
-    return ok(dep.model_dump())
+    s.refresh(obj)
+    return ok(obj.model_dump())
 
 
 @router.delete("/departments/{dep_id}")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from sqlmodel import select
 
 from app.db.session import get_session
@@ -8,6 +10,8 @@ from app.models.entities import Department, JobLevel, SkillCode, ShiftCode, Nurs
 
 def seed_if_empty() -> None:
     """只在全新資料庫時灌入一份示範資料。"""
+    if os.getenv("SKIP_SEED", "").lower() in {"1", "true", "yes"}:
+        return
     with get_session() as s:
         has_dep = s.exec(select(Department)).first() is not None
         if has_dep:
@@ -51,4 +55,3 @@ def seed_if_empty() -> None:
         proj = Project(name='示範專案', month=month)
         s.add(proj)
         s.commit()
-PY

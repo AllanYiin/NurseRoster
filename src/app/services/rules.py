@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
-from typing import Generator, Iterable
+from typing import Generator, Iterable, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 def sse_event(event: str, data: dict) -> str:
@@ -11,9 +14,9 @@ def sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
-def _mock_nl_to_dsl(nl_text: str) -> Iterable[str]:
+def _mock_nl_to_dsl_events(nl_text: str) -> Iterable[Tuple[str, dict]]:
     nl = (nl_text or "").strip()
-    yield sse_event("status", {"message": "開始轉譯（mock）"})
+    yield "status", {"message": "開始轉譯（mock）"}
     time.sleep(0.2)
     dsl = {
         "rule_id": "R1",
@@ -27,13 +30,13 @@ def _mock_nl_to_dsl(nl_text: str) -> Iterable[str]:
     }
     dsl_text = json.dumps(dsl, ensure_ascii=False, indent=2)
     for chunk in dsl_text.splitlines(True):
-        yield sse_event("token", {"text": chunk})
+        yield "token", {"text": chunk}
         time.sleep(0.01)
-    yield sse_event("completed", {"dsl_text": dsl_text})
+    yield "completed", {"dsl_text": dsl_text}
 
 
-def stream_nl_to_dsl(nl_text: str) -> Generator[str, None, None]:
-    """NL→DSL SSE streaming。
+def stream_nl_to_dsl_events(nl_text: str) -> Generator[Tuple[str, dict], None, None]:
+    """NL→DSL streaming events（後續由 SSE 或 WebSocket 包裝）。
 
     v1 策略：
     - 若有 OPENAI_API_KEY：使用 OpenAI Responses（streaming）
@@ -46,7 +49,7 @@ def stream_nl_to_dsl(nl_text: str) -> Generator[str, None, None]:
     model = os.getenv("OPENAI_RESPONSES_MODEL", "gpt-4.1")
 
     if not api_key:
-        yield from _mock_nl_to_dsl(nl_text)
+        yield from _mock_nl_to_dsl_events(nl_text)
         return
 
     # OpenAI streaming
@@ -65,7 +68,7 @@ def stream_nl_to_dsl(nl_text: str) -> Generator[str, None, None]:
             "- 僅輸出 JSON，不要加上多餘說明文字。"
         )
 
-        yield sse_event("status", {"message": "開始轉譯（OpenAI）"})
+        yield "status", {"message": "開始轉譯（OpenAI）"}
 
         stream = client.responses.create(
             model=model,
@@ -84,20 +87,27 @@ def stream_nl_to_dsl(nl_text: str) -> Generator[str, None, None]:
                 delta = getattr(ev, "delta", None) or getattr(ev, "text", None) or ""
                 if delta:
                     buf += delta
-                    yield sse_event("token", {"text": delta})
+                    yield "token", {"text": delta}
             if et == "response.completed":
                 break
 
         # try normalize
         final = buf.strip()
         if not final:
-            yield from _mock_nl_to_dsl(nl_text)
+            yield from _mock_nl_to_dsl_events(nl_text)
             return
-        yield sse_event("completed", {"dsl_text": final})
+        yield "completed", {"dsl_text": final}
 
     except Exception:
         # 任何例外直接降級，不讓 UI 卡死
-        yield from _mock_nl_to_dsl(nl_text)
+        logger.exception("NL→DSL 轉譯失敗，改用 mock。")
+        yield from _mock_nl_to_dsl_events(nl_text)
+
+
+def stream_nl_to_dsl(nl_text: str) -> Generator[str, None, None]:
+    """SSE 包裝。"""
+    for event, payload in stream_nl_to_dsl_events(nl_text):
+        yield sse_event(event, payload)
 
 
 def dsl_to_nl(dsl_text: str) -> str:

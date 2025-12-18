@@ -6,9 +6,13 @@ from pathlib import Path
 # 專案根目錄（root/run_app.bat 同層）
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-DATA_DIR = PROJECT_ROOT / "data"
-LOG_DIR = PROJECT_ROOT / "logs"
-EXPORT_DIR = PROJECT_ROOT / "exports"
+DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
+DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
+DEFAULT_EXPORT_DIR = PROJECT_ROOT / "exports"
+
+DATA_DIR = Path(os.getenv("DATA_DIR", DEFAULT_DATA_DIR))
+LOG_DIR = Path(os.getenv("LOG_DIR", DEFAULT_LOG_DIR))
+EXPORT_DIR = Path(os.getenv("EXPORT_DIR", DEFAULT_EXPORT_DIR))
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
