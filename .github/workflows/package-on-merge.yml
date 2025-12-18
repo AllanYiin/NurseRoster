@@ -19,7 +19,7 @@ jobs:
 
       - name: Verify required top-level files
         run: |
-          for file in README.md requirements.txt project_launcher.py run_app.bat; do
+          for file in README.md requirements.txt project_launcher.py run_app.bat .env.example; do
             if [ ! -f "$file" ]; then
               echo "Missing required file: $file" >&2
               exit 1
@@ -39,6 +39,13 @@ jobs:
             --exclude ".venv" --exclude "venv" \
             --exclude "dist" --exclude "build" \
             --exclude "node_modules"
+
+          if [ -f "$ARCHIVE_ROOT/.env.example" ]; then
+            cp "$ARCHIVE_ROOT/.env.example" "$ARCHIVE_ROOT/.env"
+          else
+            echo "Missing .env.example in archive root" >&2
+            exit 1
+          fi
 
       - name: Upload archive artifact
         uses: actions/upload-artifact@v4
