@@ -26,21 +26,19 @@ jobs:
             fi
           done
 
-      - name: Create archive
+      - name: Prepare archive contents
         run: |
-          ARCHIVE_DIR="artifacts"
-          ARCHIVE_NAME="nurse-roster-${GITHUB_SHA::7}.zip"
-          mkdir -p "$ARCHIVE_DIR"
-          echo "ARCHIVE_PATH=$ARCHIVE_DIR/$ARCHIVE_NAME" >> "$GITHUB_ENV"
-          zip -r "$ARCHIVE_DIR/$ARCHIVE_NAME" . \
-            -x \
-              ".git/*" \
-              "$ARCHIVE_DIR/*" \
-              "*.pyc" "*__pycache__*" \
-              ".pytest_cache/*" \
-              ".venv/*" "venv/*" \
-              "dist/*" "build/*" \
-              "node_modules/*"
+          ARCHIVE_ROOT="artifacts/nurse-roster-${GITHUB_SHA::7}"
+          mkdir -p "$ARCHIVE_ROOT"
+          echo "ARCHIVE_PATH=$ARCHIVE_ROOT" >> "$GITHUB_ENV"
+          rsync -av --delete . "$ARCHIVE_ROOT" \
+            --exclude ".git" \
+            --exclude "artifacts" \
+            --exclude "*.pyc" --exclude "*__pycache__*" \
+            --exclude ".pytest_cache" \
+            --exclude ".venv" --exclude "venv" \
+            --exclude "dist" --exclude "build" \
+            --exclude "node_modules"
 
       - name: Upload archive artifact
         uses: actions/upload-artifact@v4
