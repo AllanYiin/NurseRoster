@@ -20,7 +20,7 @@ from app.models.entities import (
     TemplateRuleLink,
     ValidationStatus,
 )
-from app.services.rules import _merge_constraints, load_rule_constraints_from_dsl, validate_dsl
+from app.services.rules import _merge_constraints, is_law_dsl, load_rule_constraints, load_rule_constraints_from_dsl, validate_dsl
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +112,9 @@ def _validate_bundle(
 
 
 def resolve_rule_bundle(session: Session, bundle_id: int) -> tuple[list, list[dict]]:
+    bundle = session.get(RuleBundle, bundle_id)
+    if not bundle:
+        return [], []
     items = session.exec(select(RuleBundleItem).where(RuleBundleItem.bundle_id == bundle_id)).all()
     if not items:
         return [], []
@@ -139,6 +142,25 @@ def resolve_rule_bundle(session: Session, bundle_id: int) -> tuple[list, list[di
             c.category = item.rule_type.value.lower()
         constraints.extend(parsed)
 
+    law_rules = session.exec(select(Rule).where(Rule.project_id == bundle.project_id)).all()
+    existing_rule_ids = {it.rule_id for it in items}
+    for rule in law_rules:
+        if rule.id in existing_rule_ids:
+            continue
+        if not is_law_dsl(rule.dsl_text):
+            continue
+        if rule.scope_type == RuleScopeType.HOSPITAL and (bundle.hospital_id is None or rule.scope_id != bundle.hospital_id):
+            continue
+        if rule.scope_type == RuleScopeType.DEPARTMENT and (bundle.department_id is None or rule.scope_id != bundle.department_id):
+            continue
+        if rule.scope_type == RuleScopeType.NURSE:
+            continue
+        parsed, validation = load_rule_constraints(rule, session=session)
+        if not validation.get("ok"):
+            logger.warning("LAW rule validation failed: rule_id=%s", getattr(rule, "id", None))
+            continue
+        constraints.extend(parsed)
+
     merged, conflicts = _merge_constraints(constraints)
     return merged, conflicts
 
@@ -164,7 +186,14 @@ def generate_rule_bundle(
     rules = session.exec(select(Rule).where(Rule.project_id == project_id)).all()
     rule_map = {r.id: r for r in rules if r.id}
 
-    def _filter_rules(scope_type: RuleScopeType, scope_id: Optional[int], allow_types: set[RuleType], include_ids: Optional[list[int]]):
+    def _filter_rules(
+        scope_type: RuleScopeType,
+        scope_id: Optional[int],
+        allow_types: set[RuleType],
+        include_ids: Optional[list[int]],
+        *,
+        include_law_disabled: bool = False,
+    ):
         if scope_type == RuleScopeType.HOSPITAL and scope_id is None:
             return []
         result = []
@@ -177,12 +206,18 @@ def generate_rule_bundle(
                 continue
             if include_ids is not None and r.id not in include_ids:
                 continue
-            if not r.is_enabled:
+            if not r.is_enabled and not (include_law_disabled and is_law_dsl(r.dsl_text)):
                 continue
             result.append(r)
         return result
 
-    law_rules = _filter_rules(RuleScopeType.GLOBAL, None, {RuleType.HARD}, law_rule_ids)
+    law_rules = []
+    law_rules.extend(_filter_rules(RuleScopeType.GLOBAL, None, {RuleType.HARD}, law_rule_ids, include_law_disabled=True))
+    law_rules.extend(_filter_rules(RuleScopeType.HOSPITAL, hospital_id, {RuleType.HARD}, law_rule_ids, include_law_disabled=True))
+    if department_id is not None:
+        law_rules.extend(
+            _filter_rules(RuleScopeType.DEPARTMENT, department_id, {RuleType.HARD}, law_rule_ids, include_law_disabled=True)
+        )
     hospital_rules = _filter_rules(RuleScopeType.HOSPITAL, hospital_id, {RuleType.HARD}, hospital_rule_ids)
 
     template_rules: list[Rule] = []

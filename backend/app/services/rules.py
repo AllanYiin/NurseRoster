@@ -88,6 +88,7 @@ class RuleConstraint:
     shift_code: Optional[str] = None
     weight: Optional[int] = None
     rule_id: Optional[int] = None
+    source: Optional[str] = None
 
     def as_dict(self) -> dict:
         return {
@@ -100,6 +101,7 @@ class RuleConstraint:
             "weight": self.weight,
             "params": self.params,
             "rule_id": self.rule_id,
+            "source": self.source,
         }
 
 
@@ -158,6 +160,28 @@ def _load_dsl_obj(dsl_text: str) -> tuple[dict | None, list[str]]:
         issues.append("根節點必須為 YAML/JSON object。")
         return None, issues
     return obj, issues
+
+
+def get_dsl_meta(dsl_text: str) -> dict:
+    obj, issues = _load_dsl_obj(dsl_text)
+    if issues or not obj:
+        return {}
+    meta = obj.get("meta")
+    return meta if isinstance(meta, dict) else {}
+
+
+def get_dsl_id(dsl_text: str) -> Optional[str]:
+    obj, issues = _load_dsl_obj(dsl_text)
+    if issues or not obj:
+        return None
+    rule_id = obj.get("id")
+    return rule_id if isinstance(rule_id, str) else None
+
+
+def is_law_dsl(dsl_text: str) -> bool:
+    meta = get_dsl_meta(dsl_text)
+    source = str(meta.get("source") or "").strip().upper()
+    return source == "LAW"
 
 
 def _normalize_yaml_indentation(dsl_text: str) -> str:
@@ -290,6 +314,8 @@ def _extract_constraints_from_obj(
     constraints: list[RuleConstraint] = []
     issues: list[str] = []
     warnings: list[str] = []
+    meta = obj.get("meta") if isinstance(obj.get("meta"), dict) else {}
+    source = meta.get("source") if isinstance(meta, dict) else None
 
     raw_constraints = obj.get("constraints") or []
     raw_objectives = obj.get("objectives") or []
@@ -401,6 +427,7 @@ def _extract_constraints_from_obj(
                 weight=weight_val,
                 params=merged_params,
                 rule_id=rule_id,
+                source=str(source).upper() if source else None,
             )
         )
 
@@ -411,6 +438,12 @@ def _merge_constraints(constraints: List[RuleConstraint]) -> tuple[List[RuleCons
     selected: dict[tuple[str, Optional[str]], RuleConstraint] = {}
     conflicts: list[dict] = []
 
+    def _is_law(c: RuleConstraint) -> bool:
+        return str(c.source or "").upper() == "LAW"
+
+    def _coverage_required(c: RuleConstraint) -> int:
+        return int(c.params.get("required") or c.params.get("min") or 0)
+
     for c in sorted(constraints, key=lambda x: (_scope_rank(x.scope_type), -int(x.priority or 0))):
         key = (c.name, c.shift_code)
         existing = selected.get(key)
@@ -419,12 +452,23 @@ def _merge_constraints(constraints: List[RuleConstraint]) -> tuple[List[RuleCons
             continue
 
         if c.category == "hard":
-            if c.name == "coverage_required":
-                min_required = int(c.params.get("required") or 0)
+            if existing and _is_law(existing) and not _is_law(c):
+                conflicts.append(
+                    {"rule_id": c.rule_id, "name": c.name, "message": "LAW 規則不可被覆寫，已保留 LAW 規則"}
+                )
+                continue
+            if _is_law(c) and existing and not _is_law(existing):
+                conflicts.append(
+                    {"rule_id": c.rule_id, "name": c.name, "message": "嘗試覆寫 LAW 規則，已強制套用 LAW 規則"}
+                )
+                selected[key] = c
+                continue
+            if c.name in {"coverage_required", "daily_coverage"}:
+                min_required = _coverage_required(c)
                 if min_required <= 0:
                     continue
                 if existing:
-                    prev_min = int(existing.params.get("required") or 0)
+                    prev_min = _coverage_required(existing)
                     if min_required < prev_min:
                         conflicts.append(
                             {
@@ -435,7 +479,7 @@ def _merge_constraints(constraints: List[RuleConstraint]) -> tuple[List[RuleCons
                         )
                         continue
                 selected[key] = c
-            elif c.name in {"max_consecutive_work_days", "max_consecutive_shift", "max_consecutive_same_shift"}:
+            elif c.name in {"max_consecutive", "max_consecutive_work_days", "max_consecutive_shift", "max_consecutive_same_shift"}:
                 max_days = int(c.params.get("max_days") or 0)
                 if max_days <= 0:
                     continue
@@ -819,6 +863,7 @@ def _dict_to_constraint(data: dict) -> RuleConstraint:
         shift_code=data.get("shift_code"),
         weight=data.get("weight"),
         rule_id=data.get("rule_id"),
+        source=data.get("source"),
     )
 
 
@@ -833,9 +878,11 @@ def load_rule_constraints_from_dsl(dsl_text: str, rule: Rule | None, session: Se
 
 
 def resolve_project_rules(session: Session, project_id: int) -> tuple[list[RuleConstraint], list[dict]]:
-    rules = session.exec(select(Rule).where(Rule.project_id == project_id, Rule.is_enabled == True)).all()  # noqa: E712
+    rules = session.exec(select(Rule).where(Rule.project_id == project_id)).all()
     all_constraints: list[RuleConstraint] = []
     for r in rules:
+        if not r.is_enabled and not is_law_dsl(r.dsl_text):
+            continue
         try:
             constraints, validation = load_rule_constraints(r, session=session)
             if not validation.get("ok"):

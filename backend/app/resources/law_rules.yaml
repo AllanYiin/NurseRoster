@@ -1,0 +1,149 @@
+version: 1
+rules:
+  - key: law_daily_single_shift
+    title: "法規：每日最多一個班別"
+    scope_type: GLOBAL
+    rule_type: HARD
+    priority: 0
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "LAW_01_DAILY_SINGLE_SHIFT"
+      name: "法規：每日最多一個班別"
+      scope:
+        type: GLOBAL
+        id: null
+      type: HARD
+      priority: 0
+      enabled: true
+      tags: ["LAW", "LAW-01"]
+      notes: "每位護理師每日最多排一個班別。"
+      meta:
+        source: LAW
+        editable: false
+        deletable: false
+        priority: 0
+      constraints:
+        - id: "C1"
+          name: one_shift_per_day
+          params: {}
+  - key: law_night_to_rest
+    title: "法規：夜班後至少 1 日休息"
+    scope_type: GLOBAL
+    rule_type: HARD
+    priority: 0
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "LAW_02_NIGHT_TO_REST"
+      name: "法規：夜班後至少 1 日休息"
+      scope:
+        type: GLOBAL
+        id: null
+      type: HARD
+      priority: 0
+      enabled: true
+      tags: ["LAW", "LAW-02"]
+      notes: "夜班後隔日不得安排工作班別。"
+      meta:
+        source: LAW
+        editable: false
+        deletable: false
+        priority: 0
+      constraints:
+        - id: "C1"
+          name: rest_after_night
+          params:
+            shift: "N"
+            off_code: "OFF"
+  - key: law_max_consecutive_work_days
+    title: "法規：連續工作天數上限"
+    scope_type: GLOBAL
+    rule_type: HARD
+    priority: 0
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "LAW_03_MAX_CONSECUTIVE_WORK_DAYS"
+      name: "法規：連續工作天數上限"
+      scope:
+        type: GLOBAL
+        id: null
+      type: HARD
+      priority: 0
+      enabled: true
+      tags: ["LAW", "LAW-03"]
+      notes: "連續工作天數不得超過 6 天。"
+      meta:
+        source: LAW
+        editable: false
+        deletable: false
+        priority: 0
+      constraints:
+        - id: "C1"
+          name: max_consecutive_work_days
+          params:
+            max_days: 6
+  - key: law_min_rest_days_per_window
+    title: "法規：每 7 日至少 1 日休假"
+    scope_type: GLOBAL
+    rule_type: HARD
+    priority: 0
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "LAW_04_MIN_REST_DAYS_PER_WINDOW"
+      name: "法規：每 7 日至少 1 日休假"
+      scope:
+        type: GLOBAL
+        id: null
+      type: HARD
+      priority: 0
+      enabled: true
+      tags: ["LAW", "LAW-04"]
+      notes: "任意連續 7 天至少 1 日休假。"
+      meta:
+        source: LAW
+        editable: false
+        deletable: false
+        priority: 0
+      constraints:
+        - id: "C1"
+          name: max_work_days_in_rolling_window
+          params:
+            window_days: 7
+            max_work_days: 6
+  - key: law_min_staff_per_shift
+    title: "法規：單日人力下限"
+    scope_type: DEPARTMENT
+    rule_type: HARD
+    priority: 0
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "LAW_05_MIN_STAFF_{department_code}"
+      name: "法規：單日人力下限"
+      scope:
+        type: DEPARTMENT
+        id: "{department_code}"
+      type: HARD
+      priority: 0
+      enabled: true
+      tags: ["LAW", "LAW-05"]
+      notes: "每一日每一班別需達最低人力。"
+      meta:
+        source: LAW
+        editable: false
+        deletable: false
+        priority: 0
+      constraints:
+        - id: "C1"
+          name: coverage_required
+          params:
+            shift_codes: ["D"]
+            required: 4
+        - id: "C2"
+          name: coverage_required
+          params:
+            shift_codes: ["E"]
+            required: 4
+        - id: "C3"
+          name: coverage_required
+          params:
+            shift_codes: ["N"]
+            required: 2

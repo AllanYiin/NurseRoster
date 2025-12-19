@@ -18,6 +18,7 @@ from app.models.entities import (
     SkillCode,
     User,
 )
+from app.services.law_rules import ensure_law_rules
 
 
 def seed_if_empty() -> None:
@@ -142,6 +143,8 @@ def seed_if_empty() -> None:
         proj = Project(name="示範專案", month=month, schedule_period_id=period.id)
         s.add(proj)
         s.commit()
+
+        ensure_law_rules(s, proj.id)
 
         snapshot = ProjectSnapshot(project_id=proj.id, name="初始化快照", snapshot={"version": 1})
         s.add(snapshot)

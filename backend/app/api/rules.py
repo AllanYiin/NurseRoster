@@ -21,6 +21,7 @@ from app.services.rules import (
     dsl_to_nl_with_prompt,
     validate_dsl,
     stream_nl_to_dsl_events,
+    is_law_dsl,
 )
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
@@ -45,6 +46,11 @@ def _ensure_rule(session: Session, rule_id: int) -> Rule:
     if not rule:
         raise HTTPException(status_code=404, detail="找不到規則")
     return rule
+
+
+def _ensure_not_law(rule: Rule) -> None:
+    if is_law_dsl(rule.dsl_text):
+        raise HTTPException(status_code=403, detail="LAW 規則不可編輯或刪除")
 
 
 def _next_version(session: Session, rule_id: int) -> int:
@@ -99,6 +105,7 @@ def update_rule(rule_id: int, payload: RuleUpsert, s: Session = Depends(db_sessi
     r = s.get(Rule, rule_id)
     if not r:
         return ok(None)
+    _ensure_not_law(r)
     r.title = payload.title
     r.nl_text = payload.nl_text
     r.dsl_text = payload.dsl_text
@@ -114,6 +121,7 @@ def update_rule(rule_id: int, payload: RuleUpsert, s: Session = Depends(db_sessi
 def delete_rule(rule_id: int, s: Session = Depends(db_session)):
     r = s.get(Rule, rule_id)
     if r:
+        _ensure_not_law(r)
         s.delete(r)
         s.commit()
     return ok(True)
@@ -129,6 +137,7 @@ def list_rule_versions(rule_id: int, s: Session = Depends(db_session)):
 @router.post("/{rule_id}/versions:from_dsl")
 def create_rule_version_from_dsl(rule_id: int, payload: RuleVersionFromDsl, s: Session = Depends(db_session)):
     rule = _ensure_rule(s, rule_id)
+    _ensure_not_law(rule)
     version = _next_version(s, rule_id)
     validation = validate_dsl(payload.dsl_text, session=s, rule=rule)
     status = _validation_status(validation)
@@ -165,6 +174,7 @@ def create_rule_version_from_nl(rule_id: int, payload: NLReq):
             if not rule:
                 yield sse_event("error", {"message": "找不到規則"})
                 return
+            _ensure_not_law(rule)
             draft_version_no = _next_version(session, rule_id)
             draft = RuleVersion(
                 rule_id=rule_id,
@@ -280,6 +290,7 @@ def api_validate(payload: dict, s: Session = Depends(db_session)):
 @router.post("/{rule_id}/activate/{version_id}")
 def activate_rule_version(rule_id: int, version_id: int, s: Session = Depends(db_session)):
     rule = _ensure_rule(s, rule_id)
+    _ensure_not_law(rule)
     version = s.get(RuleVersion, version_id)
     if not version or version.rule_id != rule_id:
         raise HTTPException(status_code=404, detail="找不到規則版本")

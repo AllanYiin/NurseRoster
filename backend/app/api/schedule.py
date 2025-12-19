@@ -150,9 +150,13 @@ def list_conflicts(project_id: int, start: Optional[dt_date] = None, end: Option
         name = (constraint.name or "").strip()
         severity = "error" if constraint.category == "hard" else "warn"
         rule_title = rule_map.get(constraint.rule_id).title if constraint.rule_id in rule_map else ""
-        if name == "daily_coverage":
+        if name in {"daily_coverage", "coverage_required"}:
             shift_code = (constraint.shift_code or "").strip()
-            min_count = int(constraint.params.get("min") or 0)
+            min_count = int(constraint.params.get("min") or constraint.params.get("required") or 0)
+            if not shift_code:
+                shift_codes = constraint.params.get("shift_codes") or []
+                if isinstance(shift_codes, list) and shift_codes:
+                    shift_code = str(shift_codes[0]).strip()
             if not shift_code or min_count <= 0:
                 continue
             for d in all_dates:
@@ -193,6 +197,56 @@ def list_conflicts(project_id: int, start: Optional[dt_date] = None, end: Option
                             )
                     else:
                         streak = 0
+        elif name == "max_consecutive_work_days":
+            max_days = int(constraint.params.get("max_days") or 0)
+            if max_days <= 0:
+                continue
+            off_code = str(constraint.params.get("off_code") or "OFF").strip() or "OFF"
+            for nurse in nurse_ids:
+                streak = 0
+                for d in all_dates:
+                    assigned = assignments_by_pair.get((nurse, d))
+                    is_work = assigned is not None and assigned.shift_code != off_code
+                    if is_work:
+                        streak += 1
+                        if streak > max_days:
+                            conflicts.append(
+                                Conflict(
+                                    rule_id=constraint.rule_id,
+                                    rule_title=rule_title,
+                                    severity=severity,
+                                    message=f"{nurse} 連續工作已超過 {max_days} 天",
+                                    date=d,
+                                    nurse_staff_no=nurse,
+                                )
+                            )
+                    else:
+                        streak = 0
+        elif name == "max_work_days_in_rolling_window":
+            window_days = int(constraint.params.get("window_days") or 0)
+            max_work_days = int(constraint.params.get("max_work_days") or 0)
+            if window_days <= 0 or max_work_days <= 0:
+                continue
+            off_code = str(constraint.params.get("off_code") or "OFF").strip() or "OFF"
+            for nurse in nurse_ids:
+                for start in range(0, len(all_dates) - window_days + 1):
+                    window = all_dates[start : start + window_days]
+                    work_days = sum(
+                        1
+                        for d in window
+                        if (assignment := assignments_by_pair.get((nurse, d))) and assignment.shift_code != off_code
+                    )
+                    if work_days > max_work_days:
+                        conflicts.append(
+                            Conflict(
+                                rule_id=constraint.rule_id,
+                                rule_title=rule_title,
+                                severity=severity,
+                                message=f"{nurse} {window_days} 日內工作天數超過 {max_work_days}",
+                                date=window[-1],
+                                nurse_staff_no=nurse,
+                            )
+                        )
         elif name == "prefer_off_after_night":
             night_code = str(constraint.params.get("shift") or constraint.shift_code or "N").strip() or "N"
             off_code = str(constraint.params.get("off_code") or "OFF").strip() or "OFF"
