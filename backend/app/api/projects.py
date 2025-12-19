@@ -74,13 +74,6 @@ def create_project(payload: ProjectCreate, session: Session = Depends(db_session
     return ok(proj.model_dump())
 
 
-@router.get("/{project_id}")
-def get_project(project_id: int, session: Session = Depends(db_session)):
-    proj = _get_project_or_404(session, project_id)
-    snapshots = session.exec(select(ProjectSnapshot).where(ProjectSnapshot.project_id == project_id).order_by(ProjectSnapshot.id.desc())).all()
-    return ok({"project": proj.model_dump(), "snapshots": [s.model_dump() for s in snapshots]})
-
-
 @router.get("/current")
 def get_current(session: Session = Depends(db_session)):
     month = datetime.now().strftime("%Y-%m")
@@ -91,6 +84,13 @@ def get_current(session: Session = Depends(db_session)):
         session.commit()
         session.refresh(proj)
     return ok({"id": proj.id, "name": proj.name, "month": proj.month})
+
+
+@router.get("/{project_id}")
+def get_project(project_id: int, session: Session = Depends(db_session)):
+    proj = _get_project_or_404(session, project_id)
+    snapshots = session.exec(select(ProjectSnapshot).where(ProjectSnapshot.project_id == project_id).order_by(ProjectSnapshot.id.desc())).all()
+    return ok({"project": proj.model_dump(), "snapshots": [s.model_dump() for s in snapshots]})
 
 
 @router.get("/{project_id}/snapshots")

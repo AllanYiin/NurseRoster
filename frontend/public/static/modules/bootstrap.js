@@ -92,7 +92,8 @@ export async function boot() {
   $("#btnCreateProject").addEventListener("click", () =>
     openProjectCreator({
       onCreated: async () => {
-        await loadCalendar().catch((e) => toast(`載入失敗：${e.message}`, "bad"));
+        toggleProjectNav(true);
+        setView("calendar");
       },
     })
   );
@@ -106,12 +107,7 @@ export async function boot() {
   try {
 
     state.project = await api("/api/projects/current");
-    $("#projectPill").textContent = `專案：${state.project.name}（${state.project.month}）`;
-    const pm = projectMonthRange();
-    if (pm) {
-      $("#conflictStart").value = isoDate(pm[0]);
-      $("#conflictEnd").value = isoDate(pm[1]);
-    }
+    setCurrentProject(state.project);
     toggleProjectNav(true);
 
   } catch (e) {
