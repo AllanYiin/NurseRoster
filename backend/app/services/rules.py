@@ -35,6 +35,12 @@ CONSTRAINT_NAMES = {
     "weekend_all_or_nothing",
     "min_full_weekends_off_in_window",
 }
+LEGACY_CONSTRAINT_NAMES = {
+    "daily_coverage",
+    "max_consecutive",
+    "prefer_off_after_night",
+    "rest_after_night",
+}
 OBJECTIVE_NAMES = {
     "balance_shift_count",
     "balance_weekend_shift_count",
@@ -131,14 +137,73 @@ def _mock_nl_to_dsl_events(nl_text: str) -> Iterable[Tuple[str, dict]]:
 
 def _load_dsl_obj(dsl_text: str) -> tuple[dict | None, list[str]]:
     issues: list[str] = []
+    raw_text = dsl_text or ""
     try:
-        obj = yaml.safe_load(dsl_text or "")
+        obj = yaml.safe_load(raw_text)
     except Exception as exc:
-        return None, [f"DSL 解析失敗：{exc}"]
+        normalized = _normalize_yaml_indentation(raw_text)
+        if normalized != raw_text:
+            try:
+                obj = yaml.safe_load(normalized)
+            except Exception:
+                return None, [f"DSL 解析失敗：{exc}"]
+        else:
+            return None, [f"DSL 解析失敗：{exc}"]
     if not isinstance(obj, dict):
         issues.append("根節點必須為 YAML/JSON object。")
         return None, issues
     return obj, issues
+
+
+def _normalize_yaml_indentation(dsl_text: str) -> str:
+    lines = dsl_text.splitlines()
+    non_empty = [(idx, line) for idx, line in enumerate(lines) if line.strip()]
+    if len(non_empty) < 2:
+        return dsl_text
+
+    def indent_of(line: str) -> int:
+        return len(line) - len(line.lstrip(" "))
+
+    first_indent = indent_of(non_empty[0][1])
+    second_indent = indent_of(non_empty[1][1])
+    if second_indent <= first_indent:
+        return dsl_text
+
+    shift = second_indent - first_indent
+    normalized_lines: list[str] = []
+    for line in lines:
+        if not line.strip():
+            normalized_lines.append(line)
+            continue
+        indent = indent_of(line)
+        if indent >= second_indent:
+            normalized_lines.append(line[shift:])
+        else:
+            normalized_lines.append(line)
+    return "\n".join(normalized_lines)
+
+
+def _is_legacy_dsl(obj: dict) -> bool:
+    return "dsl_version" not in obj and isinstance(obj.get("constraints"), (list, dict))
+
+
+def _normalize_legacy_dsl(obj: dict, rule: Rule | None) -> dict:
+    scope_type = rule.scope_type.value if rule else RuleScopeType.GLOBAL.value
+    scope_id = rule.scope_id if rule else None
+    rule_id = rule.id if rule and rule.id is not None else "LEGACY_RULE"
+    return {
+        "dsl_version": DEFAULT_DSL_VERSION,
+        "id": str(obj.get("id") or rule_id),
+        "name": str(obj.get("name") or obj.get("description") or "未命名規則"),
+        "scope": obj.get("scope") or {"type": scope_type, "id": scope_id},
+        "type": obj.get("type") or (rule.rule_type.value if rule else RuleType.HARD.value),
+        "priority": obj.get("priority") if obj.get("priority") is not None else (rule.priority if rule else 0),
+        "enabled": obj.get("enabled") if obj.get("enabled") is not None else (rule.is_enabled if rule else True),
+        "tags": obj.get("tags") or [],
+        "notes": obj.get("notes") or obj.get("description") or "",
+        "constraints": obj.get("constraints") or [],
+        "objectives": obj.get("objectives") or [],
+    }
 
 
 def _available_shift_codes(session: Session | None) -> set[str]:
@@ -181,26 +246,28 @@ def _validate_where_expression(expr: object, path: str, issues: list[str], warni
 
     lowered = expr_text.lower()
     for fn in FORBIDDEN_WHERE_FUNCTIONS:
-        if re.search(rf\"\\b{re.escape(fn)}\\s*\\(\", lowered):
-            issues.append(f\"{path} 不允許使用 {fn}（依賴解或不可編譯）。\")
-    for match in re.finditer(r\"\\b([A-Za-z_][A-Za-z0-9_]*)\\s*\\(\", expr_text):
+        if re.search(rf"\b{re.escape(fn)}\s*\(", lowered):
+            issues.append(f"{path} 不允許使用 {fn}（依賴解或不可編譯）。")
+    for match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", expr_text):
         fn_name = match.group(1)
         if fn_name.lower() not in ALLOWED_WHERE_FUNCTIONS:
-            warnings.append(f\"{path} 出現未知函數：{fn_name}，請確認是否為可用函數。\")
+            warnings.append(f"{path} 出現未知函數：{fn_name}，請確認是否為可用函數。")
 
 
 def _validate_for_each(value: object, path: str, issues: list[str]) -> None:
     if value is None:
         return
     if not isinstance(value, str):
-        issues.append(f\"{path} 必須為字串（iterator）。\")
+        issues.append(f"{path} 必須為字串（iterator）。")
         return
     lowered = value.strip().lower()
     if lowered in SUPPORTED_FOR_EACH:
         return
-    if lowered.startswith(\"rolling_days(\") and lowered.endswith(\")\"):
+    if lowered.startswith("rolling_days(") and lowered.endswith(")"):
         return
-    issues.append(f\"{path} 未支援的 iterator：{value}。請使用 nurses/days/shifts/rolling_days(...)\")
+    issues.append(f"{path} 未支援的 iterator：{value}。請使用 nurses/days/shifts/rolling_days(...)")
+
+
 def _extract_constraints_from_obj(
     obj: dict,
     *,
@@ -209,6 +276,7 @@ def _extract_constraints_from_obj(
     scope_id: Optional[str],
     priority: int,
     rule_id: Optional[int],
+    legacy_mode: bool = False,
 ) -> tuple[list[RuleConstraint], list[str], list[str]]:
     constraints: list[RuleConstraint] = []
     issues: list[str] = []
@@ -222,17 +290,20 @@ def _extract_constraints_from_obj(
     if isinstance(raw_objectives, dict):
         raw_objectives = [raw_objectives]
 
-    if rule_type == RuleType.HARD and not raw_constraints:
-        issues.append("type=HARD 時 constraints 不得為空。")
-    if rule_type in (RuleType.SOFT, RuleType.PREFERENCE) and not raw_objectives:
-        issues.append("type=SOFT/PREFERENCE 時 objectives 不得為空。")
-    if rule_type == RuleType.HARD and raw_objectives:
-        warnings.append("type=HARD 時仍提供 objectives，已忽略。")
-    if rule_type in (RuleType.SOFT, RuleType.PREFERENCE) and raw_constraints:
-        warnings.append("type=SOFT/PREFERENCE 時仍提供 constraints，已忽略。")
+    if not legacy_mode:
+        if rule_type == RuleType.HARD and not raw_constraints:
+            issues.append("type=HARD 時 constraints 不得為空。")
+        if rule_type in (RuleType.SOFT, RuleType.PREFERENCE) and not raw_objectives:
+            issues.append("type=SOFT/PREFERENCE 時 objectives 不得為空。")
+        if rule_type == RuleType.HARD and raw_objectives:
+            warnings.append("type=HARD 時仍提供 objectives，已忽略。")
+        if rule_type in (RuleType.SOFT, RuleType.PREFERENCE) and raw_constraints:
+            warnings.append("type=SOFT/PREFERENCE 時仍提供 constraints，已忽略。")
 
     items: list[tuple[str, dict, int]] = []
-    if rule_type == RuleType.HARD:
+    if legacy_mode and raw_constraints:
+        items = [("constraints", item, idx) for idx, item in enumerate(raw_constraints)]
+    elif rule_type == RuleType.HARD:
         items = [("constraints", item, idx) for idx, item in enumerate(raw_constraints)]
     else:
         items = [("objectives", item, idx) for idx, item in enumerate(raw_objectives)]
@@ -245,7 +316,7 @@ def _extract_constraints_from_obj(
         if not name:
             issues.append(f"{prefix}[{idx}] 缺少 name。")
             continue
-        if prefix == "constraints" and name not in CONSTRAINT_NAMES:
+        if prefix == "constraints" and name not in (CONSTRAINT_NAMES | LEGACY_CONSTRAINT_NAMES):
             issues.append(f"{prefix}[{idx}] 未支援的 constraint name：{name}。")
         if prefix == "objectives" and name not in OBJECTIVE_NAMES:
             issues.append(f"{prefix}[{idx}] 未支援的 objective name：{name}。")
@@ -277,6 +348,22 @@ def _extract_constraints_from_obj(
                 except Exception:
                     issues.append(f"{prefix}[{idx}] weight 必須為數字。")
                     weight_val = None
+
+        legacy_param_keys = {
+            "shift",
+            "shift_code",
+            "shift_codes",
+            "min",
+            "max",
+            "max_days",
+            "required",
+            "off_code",
+            "weight",
+        }
+        if legacy_mode:
+            for key in legacy_param_keys:
+                if key in raw and key not in params:
+                    params[key] = raw.get(key)
 
         merged_params = {
             **params,
@@ -469,6 +556,10 @@ def dsl_to_nl(dsl_text: str) -> str:
     if issues or not obj:
         return "無法解析 DSL（請確認格式為 YAML）。"
 
+    legacy_mode = _is_legacy_dsl(obj)
+    if legacy_mode:
+        obj = _normalize_legacy_dsl(obj, None)
+
     scope_type, scope_id, _ = _parse_scope(obj, None)
     raw_type = str(obj.get("type") or RuleType.HARD.value).upper()
     try:
@@ -484,6 +575,7 @@ def dsl_to_nl(dsl_text: str) -> str:
         scope_id=scope_id,
         priority=priority,
         rule_id=None,
+        legacy_mode=legacy_mode,
     )
 
     parts: list[str] = []
@@ -513,7 +605,7 @@ def dsl_to_nl(dsl_text: str) -> str:
     for c in constraints:
         label = name_map.get(c.name, c.name)
         params = c.params or {}
-        summary = f"{label}（params={params}）"
+        summary = f"{label}（{c.name}，params={params}）"
         if c.weight is not None:
             summary = f"{summary}，weight={c.weight}"
         parts.append(summary)
@@ -589,6 +681,10 @@ def validate_dsl(dsl_text: str, *, session: Session | None = None, rule: Rule | 
     if parse_issues or not obj:
         return {"ok": False, "issues": parse_issues, "warnings": []}
 
+    legacy_mode = _is_legacy_dsl(obj)
+    if legacy_mode:
+        obj = _normalize_legacy_dsl(obj, rule)
+
     dsl_version = obj.get("dsl_version")
     if not dsl_version:
         issues.append("缺少 dsl_version。")
@@ -652,6 +748,7 @@ def validate_dsl(dsl_text: str, *, session: Session | None = None, rule: Rule | 
         scope_id=scope_id,
         priority=priority,
         rule_id=rule.id if isinstance(rule, Rule) else None,
+        legacy_mode=legacy_mode,
     )
     issues.extend(constraint_issues)
     warnings.extend(constraint_warnings)
