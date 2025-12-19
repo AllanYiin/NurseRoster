@@ -107,7 +107,12 @@ class SchedulePeriod(SQLModel, table=True):
     name: str
     start_date: date = Field(index=True)
     end_date: date = Field(index=True)
+    project_id: Optional[int] = Field(default=None, index=True)
+    hospital_id: Optional[int] = Field(default=None, index=True)
+    department_id: Optional[int] = Field(default=None, index=True)
+    active_rule_bundle_id: Optional[int] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class Project(SQLModel, table=True):
@@ -177,6 +182,59 @@ class RuleVersion(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class RuleBundle(SQLModel, table=True):
+    model_config = {"use_enum_values": True}
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(index=True)
+    period_id: int = Field(index=True)
+    hospital_id: Optional[int] = Field(default=None, index=True)
+    department_id: Optional[int] = Field(default=None, index=True)
+    name: str
+    bundle_sha256: str
+    source_config_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    validation_status: ValidationStatus = Field(
+        default=ValidationStatus.PENDING,
+        sa_column=Column(SAEnum(ValidationStatus, native_enum=False), index=True),
+    )
+    validation_report_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RuleBundleItem(SQLModel, table=True):
+    model_config = {"use_enum_values": True}
+    id: Optional[int] = Field(default=None, primary_key=True)
+    bundle_id: int = Field(index=True)
+    layer: str = Field(index=True)
+    rule_id: int = Field(index=True)
+    rule_version_id: int = Field(index=True)
+    dsl_sha256: str
+    rule_type: RuleType = Field(sa_column=Column(SAEnum(RuleType, native_enum=False), index=True))
+    priority_at_time: int = 0
+    enabled_at_time: bool = True
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Template(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    hospital_id: Optional[int] = Field(default=None, index=True)
+    department_id: Optional[int] = Field(default=None, index=True)
+    description: str = ""
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class TemplateRuleLink(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    template_id: int = Field(index=True)
+    rule_id: int = Field(index=True)
+    included: bool = True
+    overrides_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class OptimizationJob(SQLModel, table=True):
     model_config = {"use_enum_values": True}
 
@@ -194,6 +252,7 @@ class OptimizationJob(SQLModel, table=True):
     time_limit_seconds: Optional[int] = 0
     random_seed: Optional[int] = None
     solver_threads: Optional[int] = None
+    rule_bundle_id: Optional[int] = Field(default=None, index=True)
     parameters: dict = Field(default_factory=dict, sa_column=Column(JSON))
     request_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
     compile_report_json: dict = Field(default_factory=dict, sa_column=Column(JSON))

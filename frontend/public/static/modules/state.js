@@ -13,4 +13,5 @@ export const state = {
   modal: {
     onOk: null,
   },
+  ruleBundleWizard: null,
 };

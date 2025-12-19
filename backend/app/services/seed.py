@@ -126,7 +126,15 @@ def seed_if_empty() -> None:
 
         start_date = date.today().replace(day=1)
         end_date = date(start_date.year, start_date.month, 28)
-        period = SchedulePeriod(name=f"{start_date:%Y-%m} 排班周期", start_date=start_date, end_date=end_date)
+        icu = s.exec(select(Department).where(Department.code == "ICU")).first()
+        period = SchedulePeriod(
+            name=f"{start_date:%Y-%m} 排班周期",
+            start_date=start_date,
+            end_date=end_date,
+            project_id=None,
+            hospital_id=1,
+            department_id=icu.id if icu else None,
+        )
         s.add(period)
         s.commit()
 

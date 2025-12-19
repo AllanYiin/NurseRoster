@@ -12,6 +12,7 @@ from app.api.deps import db_session
 from app.models.entities import Assignment, Project, Rule, SchedulePeriod
 from app.schemas.common import ok
 from app.services.rules import resolve_project_rules
+from app.services.rule_bundles import resolve_rule_bundle
 
 router = APIRouter(prefix="/api/schedule", tags=["schedule"])
 
@@ -113,7 +114,17 @@ def list_conflicts(project_id: int, start: Optional[dt_date] = None, end: Option
     rules = session.exec(select(Rule).where(Rule.project_id == project_id, Rule.is_enabled == True)).all()  # noqa: E712
     rule_map = {r.id: r for r in rules if r.id}
 
-    merged_constraints, merge_conflicts = resolve_project_rules(session, project_id)
+    merged_constraints = []
+    merge_conflicts = []
+    bundle_id = None
+    if project.schedule_period_id:
+        period = session.get(SchedulePeriod, project.schedule_period_id)
+        if period and period.active_rule_bundle_id:
+            bundle_id = period.active_rule_bundle_id
+    if bundle_id:
+        merged_constraints, merge_conflicts = resolve_rule_bundle(session, bundle_id)
+    else:
+        merged_constraints, merge_conflicts = resolve_project_rules(session, project_id)
     for mc in merge_conflicts:
         rid = mc.get("rule_id")
         conflicts.append(
