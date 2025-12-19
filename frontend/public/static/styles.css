@@ -130,8 +130,7 @@ body{
 #toast.good{border-color:rgba(16,185,129,0.4)}
 #toast.warn{border-color:rgba(245,158,11,0.5)}
 #toast.bad{border-color:rgba(239,68,68,0.5)}
-.modal{position:fixed; inset:0; background:rgba(15,23,42,0.45); display:none; align-items:center; justify-content:center; padding:18px}
-.modal.show{display:flex}
+.modal{position:fixed; inset:0; background:rgba(15,23,42,0.45); display:flex; align-items:center; justify-content:center; padding:18px}
 .modal__panel{width:min(720px, 100%); background:#fff; border-radius:18px; border:1px solid var(--border); box-shadow: var(--shadow)}
 .modal__hd{padding:14px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between}
 .modal__bd{padding:16px}
