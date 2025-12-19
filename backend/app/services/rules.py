@@ -3,109 +3,67 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Generator, Iterable, List, Optional, Tuple
 
+import yaml
 from sqlmodel import Session, select
 
 from app.models.entities import Department, Nurse, Rule, RuleScopeType, RuleType, ShiftCode, ValidationStatus
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DSL_VERSION = "sr-dsl/1.0"
-ALLOWED_DSL_VERSIONS = {DEFAULT_DSL_VERSION, "sr-dsl/1.1", "sr-dsl/1.1.3"}
-WEIGHT_MIN = 1
-WEIGHT_MAX = 100
-SUPPORTED_OPERATORS = {
-    "AND",
-    "OR",
-    "NOT",
-    "XOR",
-    "IMPLIES",
-    "IFF",
-    "EQ",
-    "NE",
-    "GT",
-    "GTE",
-    "LT",
-    "LTE",
-    "IN",
-    "BETWEEN",
-    "ADD",
-    "SUB",
-    "MUL",
-    "DIV",
-    "MOD",
-    "ABS",
-    "MIN",
-    "MAX",
-    "CLAMP",
-    "ROUND",
-    "SET",
-    "UNION",
-    "INTERSECT",
-    "DIFF",
-    "SIZE",
-    "CONTAINS",
-    "DISTINCT",
-    "SORT",
-    "IF",
-    "COALESCE",
-    "IS_NULL",
-    "FORALL",
-    "EXISTS",
-    "COUNT_IF",
-    "SUM",
-    "MIN_OF",
-    "MAX_OF",
-    "CONCAT",
-    "LOWER",
-    "UPPER",
-    "MATCH",
+DEFAULT_DSL_VERSION = "1.0"
+WEIGHT_MIN = 0
+WEIGHT_MAX = 100000
+CONSTRAINT_NAMES = {
+    "one_shift_per_day",
+    "coverage_required",
+    "max_consecutive_work_days",
+    "max_consecutive_shift",
+    "forbid_transition",
+    "rest_after_shift",
+    "max_assignments_in_window",
+    "max_work_days_in_rolling_window",
+    "unavailable_dates",
+    "skill_coverage",
+    "if_novice_present_then_senior_present",
+    "max_consecutive_same_shift",
+    "min_consecutive_off_days",
+    "weekend_all_or_nothing",
+    "min_full_weekends_off_in_window",
 }
-SUPPORTED_FUNCTIONS = {
-    "shift_assigned",
-    "assigned_shift",
-    "is_work_shift",
-    "is_off_shift",
-    "in_dept",
-    "has_rank_at_least",
-    "employment_type_is",
-    "nurse_is_active",
-    "day_of_week",
+OBJECTIVE_NAMES = {
+    "balance_shift_count",
+    "balance_weekend_shift_count",
+    "penalize_transition",
+    "prefer_off_on_weekends",
+    "prefer_shift",
+    "penalize_single_off_day",
+    "penalize_consecutive_same_shift",
+}
+ALLOWED_WHERE_FUNCTIONS = {
+    "dept",
+    "job_level",
+    "has_skill",
+    "in_group",
+    "date",
+    "days_between",
     "is_weekend",
-    "is_holiday",
-    "week_of_period",
-    "date_add",
-    "date_diff_days",
-    "count_consecutive_work_days",
-    "has_sequence",
-    "rest_minutes_between",
-    "coverage_count",
-    "required_coverage",
-    "coverage_shortage",
-    "count_shifts_in_period",
-    "count_weekend_shifts",
-    "deviation_from_mean",
-    "penalty_if",
-    "penalty_per_occurrence",
-    "reward_if",
-    "format_date",
-    "format_shift",
-    "lookup_nurse_name",
-    "explain_expr",
+    "dow",
+    "rolling_days",
 }
-FORBIDDEN_SOLVER_FUNCTIONS = {
-    "MATCH",
-    "SORT",
-    "format_date",
-    "format_shift",
-    "lookup_nurse_name",
-    "explain_expr",
-    "assigned_shift",
+FORBIDDEN_WHERE_FUNCTIONS = {
+    "assigned",
+    "assigned_any",
+    "count_assigned",
+    "count_work_days",
+    "shift_of",
 }
-SUPPORTED_DOMAIN_ITERS = {"NURSES", "DATES", "SHIFTS", "ASSIGNMENTS"}
+SUPPORTED_FOR_EACH = {"nurses", "days", "shifts"}
+ALLOWED_DSL_MAJOR = "1."
 
 
 @dataclass
@@ -113,7 +71,7 @@ class RuleConstraint:
     name: str
     category: str
     scope_type: RuleScopeType
-    scope_id: Optional[int]
+    scope_id: Optional[str]
     priority: int
     params: dict = field(default_factory=dict)
     shift_code: Optional[str] = None
@@ -143,21 +101,44 @@ def _mock_nl_to_dsl_events(nl_text: str) -> Iterable[Tuple[str, dict]]:
     nl = (nl_text or "").strip()
     yield "status", {"message": "開始轉譯（mock）"}
     time.sleep(0.2)
-    dsl = {
-        "rule_id": "R1",
-        "description": nl or "(空)",
-        "scope": {"department": "ER", "month": "*"},
-        "constraints": [
-            {"type": "hard", "name": "daily_coverage", "shift": "D", "min": 2},
-            {"type": "hard", "name": "max_consecutive", "shift": "N", "max_days": 2},
-            {"type": "soft", "name": "prefer_off_after_night", "weight": 3},
-        ],
-    }
-    dsl_text = json.dumps(dsl, ensure_ascii=False, indent=2)
+    dsl_text = "\n".join(
+        [
+            "dsl_version: \"1.0\"",
+            "id: \"R_GLOBAL_001\"",
+            "name: \"每日班別最低人力\"",
+            "scope:",
+            "  type: GLOBAL",
+            "  id: null",
+            "type: HARD",
+            "priority: 100",
+            "enabled: true",
+            "tags: [\"coverage\"]",
+            f"notes: \"{nl or '(空)'}\"",
+            "constraints:",
+            "  - id: \"C1\"",
+            "    name: coverage_required",
+            "    params:",
+            "      shift_codes: [\"D\"]",
+            "      required: 2",
+            "    message: \"每日 D 班至少 2 人\"",
+        ]
+    )
     for chunk in dsl_text.splitlines(True):
         yield "token", {"text": chunk}
         time.sleep(0.01)
     yield "completed", {"dsl_text": dsl_text}
+
+
+def _load_dsl_obj(dsl_text: str) -> tuple[dict | None, list[str]]:
+    issues: list[str] = []
+    try:
+        obj = yaml.safe_load(dsl_text or "")
+    except Exception as exc:
+        return None, [f"DSL 解析失敗：{exc}"]
+    if not isinstance(obj, dict):
+        issues.append("根節點必須為 YAML/JSON object。")
+        return None, issues
+    return obj, issues
 
 
 def _available_shift_codes(session: Session | None) -> set[str]:
@@ -173,135 +154,59 @@ def _available_shift_codes(session: Session | None) -> set[str]:
     return codes
 
 
-def _parse_scope(obj: dict, rule: Rule | None) -> tuple[RuleScopeType, Optional[int], list[str]]:
+def _parse_scope(obj: dict, rule: Rule | None) -> tuple[RuleScopeType, Optional[str], list[str]]:
     warnings: list[str] = []
     scope_obj = obj.get("scope") if isinstance(obj.get("scope"), dict) else {}
-    raw_scope = scope_obj.get("scope_type") or scope_obj.get("type") or (rule.scope_type.value if rule else None) or RuleScopeType.GLOBAL.value
+    raw_scope = scope_obj.get("type") or (rule.scope_type.value if rule else None) or RuleScopeType.GLOBAL.value
     try:
         scope_type = RuleScopeType(str(raw_scope).upper())
     except Exception:
         warnings.append(f"未知的 scope_type：{raw_scope}，已套用 GLOBAL")
         scope_type = RuleScopeType.GLOBAL
 
-    scope_id = scope_obj.get("scope_id") or scope_obj.get("dept_id") or scope_obj.get("nurse_id") or (rule.scope_id if rule else None)
-    try:
-        scope_id = int(scope_id) if scope_id is not None else None
-    except Exception:
-        warnings.append(f"scope_id 必須為數字，取得到 {scope_id}")
-        scope_id = None
+    scope_id = scope_obj.get("id") or (rule.scope_id if rule else None)
+    if scope_id is not None:
+        scope_id = str(scope_id)
     return scope_type, scope_id, warnings
-
-
-def _validate_expr(expr: object, path: str, issues: list[str], warnings: list[str]) -> None:
+def _validate_where_expression(expr: object, path: str, issues: list[str], warnings: list[str]) -> None:
     if expr is None:
-        warnings.append(f"{path} 為 None，已忽略。")
         return
-    if isinstance(expr, (bool, int, float, str)):
+    if not isinstance(expr, str):
+        issues.append(f"{path} 必須為字串（Expression）。")
         return
-    if isinstance(expr, list):
-        for idx, item in enumerate(expr):
-            _validate_expr(item, f"{path}[{idx}]", issues, warnings)
-        return
-    if not isinstance(expr, dict):
-        issues.append(f"{path} 必須為表達式（物件），取得 {type(expr).__name__}。")
+    expr_text = expr.strip()
+    if not expr_text:
+        warnings.append(f"{path} 為空字串，已忽略。")
         return
 
-    if "op" in expr:
-        op = str(expr.get("op", "")).upper()
-        if not op:
-            issues.append(f"{path}.op 不得為空。")
-        elif op not in SUPPORTED_OPERATORS:
-            issues.append(f"{path} 未支援的 operator：{op}。")
-        args = expr.get("args")
-        if args is None:
-            issues.append(f"{path}.args 缺少運算元。")
-        elif not isinstance(args, list):
-            issues.append(f"{path}.args 必須為陣列。")
-        else:
-            for idx, arg in enumerate(args):
-                _validate_expr(arg, f"{path}.args[{idx}]", issues, warnings)
+    lowered = expr_text.lower()
+    for fn in FORBIDDEN_WHERE_FUNCTIONS:
+        if re.search(rf\"\\b{re.escape(fn)}\\s*\\(\", lowered):
+            issues.append(f\"{path} 不允許使用 {fn}（依賴解或不可編譯）。\")
+    for match in re.finditer(r\"\\b([A-Za-z_][A-Za-z0-9_]*)\\s*\\(\", expr_text):
+        fn_name = match.group(1)
+        if fn_name.lower() not in ALLOWED_WHERE_FUNCTIONS:
+            warnings.append(f\"{path} 出現未知函數：{fn_name}，請確認是否為可用函數。\")
+
+
+def _validate_for_each(value: object, path: str, issues: list[str]) -> None:
+    if value is None:
         return
-
-    if "fn" in expr:
-        fn = str(expr.get("fn", "")).lower()
-        if not fn:
-            issues.append(f"{path}.fn 不得為空。")
-        elif fn not in SUPPORTED_FUNCTIONS:
-            issues.append(f"{path} 未支援的 function：{fn}。")
-        if fn in FORBIDDEN_SOLVER_FUNCTIONS:
-            warnings.append(f"{path} 使用 {fn} 僅供解釋/UI，不建議進 solver。")
-        args = expr.get("args")
-        if args is not None and not isinstance(args, dict):
-            issues.append(f"{path}.args 必須為物件。")
-        elif isinstance(args, dict):
-            for key, val in args.items():
-                _validate_expr(val, f"{path}.args.{key}", issues, warnings)
+    if not isinstance(value, str):
+        issues.append(f\"{path} 必須為字串（iterator）。\")
         return
-
-    if "iter" in expr:
-        iter_val = str(expr.get("iter", "")).upper()
-        if iter_val not in SUPPORTED_DOMAIN_ITERS:
-            issues.append(f"{path}.iter 未支援的 iterator：{iter_val}。")
-        where_expr = expr.get("where")
-        if where_expr is not None:
-            _validate_expr(where_expr, f"{path}.where", issues, warnings)
+    lowered = value.strip().lower()
+    if lowered in SUPPORTED_FOR_EACH:
         return
-
-    if "lambda" in expr:
-        body_expr = expr.get("body")
-        _validate_expr(body_expr, f"{path}.body", issues, warnings)
+    if lowered.startswith(\"rolling_days(\") and lowered.endswith(\")\"):
         return
-
-    # 未知物件型態
-    warnings.append(f"{path} 為未識別的表達式物件，請確認 DSL 規格。")
-
-
-def _validate_body(obj: dict, category: str, issues: list[str], warnings: list[str]) -> None:
-    body = obj.get("body")
-    if body is None:
-        return
-    if not isinstance(body, dict):
-        issues.append("body 必須為 object。")
-        return
-
-    body_type = str(body.get("type") or "").lower()
-    if not body_type:
-        warnings.append("body 缺少 type，預期為 constraint 或 objective。")
-    elif body_type not in {"constraint", "objective"}:
-        issues.append(f"body.type 僅支援 constraint|objective，取得 {body_type}。")
-
-    when_expr = body.get("when")
-    if when_expr is not None:
-        _validate_expr(when_expr, "body.when", issues, warnings)
-
-    assert_expr = body.get("assert")
-    if body_type == "constraint":
-        if assert_expr is None:
-            issues.append("body.type=constraint 必須提供 assert。")
-        else:
-            _validate_expr(assert_expr, "body.assert", issues, warnings)
-
-    penalty_expr = body.get("penalty")
-    reward_expr = body.get("reward")
-    if body_type == "objective":
-        if penalty_expr is None and reward_expr is None:
-            issues.append("body.type=objective 必須提供 penalty 或 reward。")
-        if penalty_expr is not None:
-            _validate_expr(penalty_expr, "body.penalty", issues, warnings)
-        if reward_expr is not None:
-            _validate_expr(reward_expr, "body.reward", issues, warnings)
-
-    weight_val = body.get("weight")
-    if category in ("soft", "preference") and weight_val is None:
-        warnings.append("軟性/偏好規則建議設定 weight，用於 penalty/reward 加權。")
-    if weight_val is not None and not isinstance(weight_val, (int, float)):
-        issues.append(f"body.weight 必須為數字，取得 {weight_val}。")
+    issues.append(f\"{path} 未支援的 iterator：{value}。請使用 nurses/days/shifts/rolling_days(...)\")
 def _extract_constraints_from_obj(
     obj: dict,
     *,
-    fallback_category: str,
+    rule_type: RuleType,
     scope_type: RuleScopeType,
-    scope_id: Optional[int],
+    scope_id: Optional[str],
     priority: int,
     rule_id: Optional[int],
 ) -> tuple[list[RuleConstraint], list[str], list[str]]:
@@ -309,111 +214,90 @@ def _extract_constraints_from_obj(
     issues: list[str] = []
     warnings: list[str] = []
 
-    raw_constraints = obj.get("constraints") or obj.get("constraint") or []
+    raw_constraints = obj.get("constraints") or []
+    raw_objectives = obj.get("objectives") or []
+
     if isinstance(raw_constraints, dict):
         raw_constraints = [raw_constraints]
+    if isinstance(raw_objectives, dict):
+        raw_objectives = [raw_objectives]
 
-    if not raw_constraints and "body" not in obj:
-        issues.append("constraints 不得為空。")
-        return constraints, issues, warnings
+    if rule_type == RuleType.HARD and not raw_constraints:
+        issues.append("type=HARD 時 constraints 不得為空。")
+    if rule_type in (RuleType.SOFT, RuleType.PREFERENCE) and not raw_objectives:
+        issues.append("type=SOFT/PREFERENCE 時 objectives 不得為空。")
+    if rule_type == RuleType.HARD and raw_objectives:
+        warnings.append("type=HARD 時仍提供 objectives，已忽略。")
+    if rule_type in (RuleType.SOFT, RuleType.PREFERENCE) and raw_constraints:
+        warnings.append("type=SOFT/PREFERENCE 時仍提供 constraints，已忽略。")
 
-    for idx, raw in enumerate(raw_constraints):
+    items: list[tuple[str, dict, int]] = []
+    if rule_type == RuleType.HARD:
+        items = [("constraints", item, idx) for idx, item in enumerate(raw_constraints)]
+    else:
+        items = [("objectives", item, idx) for idx, item in enumerate(raw_objectives)]
+
+    for prefix, raw, idx in items:
         if not isinstance(raw, dict):
-            issues.append(f"constraints[{idx}] 必須為 object")
+            issues.append(f"{prefix}[{idx}] 必須為 object。")
             continue
-        params = raw.get("params") if isinstance(raw.get("params"), dict) else {}
-        name = (raw.get("name") or raw.get("constraint") or raw.get("type") or params.get("name") or "").strip()
+        name = str(raw.get("name") or "").strip()
         if not name:
-            issues.append(f"constraints[{idx}] 缺少 name")
+            issues.append(f"{prefix}[{idx}] 缺少 name。")
             continue
-        category = str(raw.get("category") or fallback_category or "hard").lower()
-        shift_code = (raw.get("shift") or raw.get("shift_code") or params.get("shift") or "").strip() or None
-        merged_params = {k: v for k, v in raw.items() if k not in {"name", "category", "type", "constraint", "weight"}}
-        merged_params.update(params)
-        weight_val = raw.get("weight")
-        if weight_val is None and category in ("soft", "preference"):
-            warnings.append(f"constraints[{idx}] ({name}) 未指定 weight，已套用預設 1。")
-            weight_val = 1
-        if weight_val is not None:
-            try:
-                weight_val = int(weight_val)
-                if weight_val < WEIGHT_MIN or weight_val > WEIGHT_MAX:
-                    issues.append(
-                        f"constraints[{idx}] ({name}) weight 應介於 {WEIGHT_MIN}-{WEIGHT_MAX}，取得 {weight_val}。"
-                    )
-            except Exception:
-                issues.append(f"constraints[{idx}] ({name}) weight 必須為數字。")
-                weight_val = None
+        if prefix == "constraints" and name not in CONSTRAINT_NAMES:
+            issues.append(f"{prefix}[{idx}] 未支援的 constraint name：{name}。")
+        if prefix == "objectives" and name not in OBJECTIVE_NAMES:
+            issues.append(f"{prefix}[{idx}] 未支援的 objective name：{name}。")
 
-        if name == "max_consecutive":
-            max_days = merged_params.get("max_days") or merged_params.get("max")
-            try:
-                max_days_int = int(max_days)
-                merged_params["max_days"] = max_days_int
-                if max_days_int <= 0:
-                    issues.append(f"constraints[{idx}] ({name}) max_days 必須大於 0。")
-            except Exception:
-                issues.append(f"constraints[{idx}] ({name}) 缺少有效的 max_days。")
-        elif name == "daily_coverage":
-            min_count = merged_params.get("min")
-            try:
-                min_int = int(min_count)
-                merged_params["min"] = min_int
-                if min_int <= 0:
-                    issues.append(f"constraints[{idx}] ({name}) min 必須大於 0。")
-            except Exception:
-                issues.append(f"constraints[{idx}] ({name}) 缺少有效的 min。")
-        elif name == "min_full_weekends_off_in_window":
-            try:
-                window_days = int(merged_params.get("window_days"))
-                min_full = int(merged_params.get("min_full_weekends_off"))
-                merged_params["window_days"] = window_days
-                merged_params["min_full_weekends_off"] = min_full
-                if window_days <= 0 or min_full <= 0:
-                    issues.append(f"constraints[{idx}] ({name}) window_days/min_full_weekends_off 必須大於 0。")
-            except Exception:
-                issues.append(f"constraints[{idx}] ({name}) 缺少有效的 window_days/min_full_weekends_off。")
-        elif name == "min_consecutive_off_days":
-            try:
-                min_days = int(merged_params.get("min_days"))
-                merged_params["min_days"] = min_days
-                if min_days <= 1:
-                    issues.append(f"constraints[{idx}] ({name}) min_days 必須大於 1。")
-            except Exception:
-                issues.append(f"constraints[{idx}] ({name}) 缺少有效的 min_days。")
-        elif name == "max_work_days_in_rolling_window":
-            try:
-                window_days = int(merged_params.get("window_days"))
-                max_days = int(merged_params.get("max_work_days"))
-                merged_params["window_days"] = window_days
-                merged_params["max_work_days"] = max_days
-                if window_days <= 0 or max_days <= 0:
-                    issues.append(f"constraints[{idx}] ({name}) window_days/max_work_days 必須大於 0。")
-            except Exception:
-                issues.append(f"constraints[{idx}] ({name}) 缺少有效的 window_days/max_work_days。")
-        elif name == "max_consecutive_same_shift":
-            try:
-                max_days = int(merged_params.get("max_days"))
-                merged_params["max_days"] = max_days
-                if max_days <= 0:
-                    issues.append(f"constraints[{idx}] ({name}) max_days 必須大於 0。")
-            except Exception:
-                issues.append(f"constraints[{idx}] ({name}) 缺少有效的 max_days。")
-        elif name == "if_novice_present_then_senior_present":
-            try:
-                min_senior = int(merged_params.get("min_senior") or 1)
-                trigger = int(merged_params.get("trigger_if_novice_count_ge") or 1)
-                merged_params["min_senior"] = min_senior
-                merged_params["trigger_if_novice_count_ge"] = trigger
-                if min_senior <= 0 or trigger <= 0:
-                    issues.append(f"constraints[{idx}] ({name}) min_senior/trigger 必須大於 0。")
-            except Exception:
-                issues.append(f"constraints[{idx}] ({name}) 缺少有效的 min_senior/trigger。")
+        params = raw.get("params")
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            issues.append(f"{prefix}[{idx}].params 必須為 object。")
+            params = {}
+
+        for_each = raw.get("for_each")
+        _validate_for_each(for_each, f"{prefix}[{idx}].for_each", issues)
+
+        where_expr = raw.get("where")
+        _validate_where_expression(where_expr, f"{prefix}[{idx}].where", issues, warnings)
+
+        weight_val = raw.get("weight")
+        if prefix == "objectives":
+            if weight_val is None:
+                issues.append(f"{prefix}[{idx}] 必須提供 weight。")
+            else:
+                try:
+                    weight_val = int(weight_val)
+                    if weight_val < WEIGHT_MIN or weight_val > WEIGHT_MAX:
+                        issues.append(
+                            f"{prefix}[{idx}] weight 應介於 {WEIGHT_MIN}-{WEIGHT_MAX}，取得 {weight_val}。"
+                        )
+                except Exception:
+                    issues.append(f"{prefix}[{idx}] weight 必須為數字。")
+                    weight_val = None
+
+        merged_params = {
+            **params,
+            "for_each": for_each,
+            "where": where_expr,
+            "message": raw.get("message"),
+        }
+        shift_code = (
+            merged_params.get("shift_code")
+            or merged_params.get("shift")
+            or (merged_params.get("shift_codes") or [None])[0]
+        )
+        if isinstance(shift_code, str):
+            shift_code = shift_code.strip() or None
+        else:
+            shift_code = None
 
         constraints.append(
             RuleConstraint(
                 name=name,
-                category=category,
+                category=rule_type.value.lower(),
                 scope_type=scope_type,
                 scope_id=scope_id,
                 priority=priority,
@@ -439,12 +323,12 @@ def _merge_constraints(constraints: List[RuleConstraint]) -> tuple[List[RuleCons
             continue
 
         if c.category == "hard":
-            if c.name == "daily_coverage":
-                min_required = int(c.params.get("min") or 0)
+            if c.name == "coverage_required":
+                min_required = int(c.params.get("required") or 0)
                 if min_required <= 0:
                     continue
                 if existing:
-                    prev_min = int(existing.params.get("min") or 0)
+                    prev_min = int(existing.params.get("required") or 0)
                     if min_required < prev_min:
                         conflicts.append(
                             {
@@ -455,7 +339,7 @@ def _merge_constraints(constraints: List[RuleConstraint]) -> tuple[List[RuleCons
                         )
                         continue
                 selected[key] = c
-            elif c.name == "max_consecutive":
+            elif c.name in {"max_consecutive_work_days", "max_consecutive_shift", "max_consecutive_same_shift"}:
                 max_days = int(c.params.get("max_days") or 0)
                 if max_days <= 0:
                     continue
@@ -528,12 +412,13 @@ def stream_nl_to_dsl_events(nl_text: str) -> Generator[Tuple[str, dict], None, N
 
         system = (
             "你是護理排班規則的 DSL 轉譯器。\n"
-            "請將使用者的自然語言規則，轉成『JSON 格式』的 DSL。\n"
+            "請將使用者的自然語言規則，轉成『YAML 格式』的 DSL。\n"
             "要求：\n"
             "- 根節點為 object\n"
-            "- 必須包含 description, constraints(list)\n"
-            "- constraints 元素格式：{type: hard|soft|preference, name:..., params...} 或保持與既有樣式相容\n"
-            "- 僅輸出 JSON，不要加上多餘說明文字。"
+            "- 必須包含 dsl_version, id, name, scope, type, priority, enabled\n"
+            "- HARD 使用 constraints；SOFT/PREFERENCE 使用 objectives\n"
+            "- where 僅用於展開過濾，不得使用依賴解的函數\n"
+            "- 僅輸出 YAML，不要加上多餘說明文字。"
         )
 
         yield "status", {"message": "開始轉譯（OpenAI）"}
@@ -580,31 +465,60 @@ def stream_nl_to_dsl(nl_text: str) -> Generator[str, None, None]:
 
 def dsl_to_nl(dsl_text: str) -> str:
     """v1: DSL→NL（簡化）。"""
+    obj, issues = _load_dsl_obj(dsl_text)
+    if issues or not obj:
+        return "無法解析 DSL（請確認格式為 YAML）。"
+
+    scope_type, scope_id, _ = _parse_scope(obj, None)
+    raw_type = str(obj.get("type") or RuleType.HARD.value).upper()
     try:
-        obj = json.loads(dsl_text)
-        scope_type, scope_id, _ = _parse_scope(obj if isinstance(obj, dict) else {}, None)
-        fallback_category = str(obj.get("category") or "hard") if isinstance(obj, dict) else "hard"
-        priority = int(obj.get("priority") or 0) if isinstance(obj, dict) else 0
-        constraints, _, _ = _extract_constraints_from_obj(
-            obj if isinstance(obj, dict) else {},
-            fallback_category=fallback_category,
-            scope_type=scope_type,
-            scope_id=scope_id,
-            priority=priority,
-            rule_id=None,
-        )
-        desc = obj.get("description", "") if isinstance(obj, dict) else ""
-        parts = [f"規則描述：{desc}"] if desc else []
-        for c in constraints:
-            if c.name == "daily_coverage":
-                parts.append(f"每天 {c.shift_code or ''} 班至少 {c.params.get('min')} 人。")
-            elif c.name == "max_consecutive":
-                parts.append(f"{c.shift_code or ''} 班連續不得超過 {c.params.get('max_days')} 天。")
-            elif c.name == "prefer_off_after_night":
-                parts.append("大夜後偏好安排休假（軟限制）。")
-        return "\n".join(parts) or "無法解析 DSL（請確認格式為 JSON）。"
+        rule_type = RuleType(raw_type)
     except Exception:
-        return "無法解析 DSL（請確認格式為 JSON）。"
+        rule_type = RuleType.HARD
+
+    priority = int(obj.get("priority") or 0)
+    constraints, _, _ = _extract_constraints_from_obj(
+        obj,
+        rule_type=rule_type,
+        scope_type=scope_type,
+        scope_id=scope_id,
+        priority=priority,
+        rule_id=None,
+    )
+
+    parts: list[str] = []
+    header = f"{rule_type.value} / {scope_type.value}"
+    if scope_id:
+        header += f" ({scope_id})"
+    parts.append(header)
+
+    name_map = {
+        "coverage_required": "每日班別需求",
+        "max_consecutive_work_days": "最大連續上班天數",
+        "max_consecutive_shift": "最大連續特定班別",
+        "forbid_transition": "禁止班別銜接",
+        "rest_after_shift": "指定班別後休息",
+        "unavailable_dates": "不可排班日期",
+        "skill_coverage": "技能覆蓋",
+        "if_novice_present_then_senior_present": "新手在場需資深在場",
+        "balance_shift_count": "班別數量平衡",
+        "balance_weekend_shift_count": "週末班別數量平衡",
+        "penalize_transition": "懲罰班別銜接",
+        "prefer_off_on_weekends": "偏好週末休假",
+        "prefer_shift": "偏好班別",
+        "penalize_single_off_day": "懲罰單日休",
+        "penalize_consecutive_same_shift": "懲罰連續相同班別",
+    }
+
+    for c in constraints:
+        label = name_map.get(c.name, c.name)
+        params = c.params or {}
+        summary = f"{label}（params={params}）"
+        if c.weight is not None:
+            summary = f"{summary}，weight={c.weight}"
+        parts.append(summary)
+
+    return "\n".join(parts)
 
 
 def dsl_to_nl_with_prompt(dsl_text: str, system_prompt: str | None = None) -> dict:
@@ -671,36 +585,69 @@ def validate_dsl(dsl_text: str, *, session: Session | None = None, rule: Rule | 
     """進階 validator：schema/邏輯/參照完整性/dsl_version 相容性。"""
     issues: list[str] = []
     warnings: list[str] = []
-    try:
-        obj = json.loads(dsl_text)
-    except Exception as e:
-        return {"ok": False, "issues": [f"JSON 解析失敗：{e}"], "warnings": []}
-
-    if not isinstance(obj, dict):
-        issues.append("根節點必須為 JSON object。")
-        return {"ok": False, "issues": issues, "warnings": warnings}
+    obj, parse_issues = _load_dsl_obj(dsl_text)
+    if parse_issues or not obj:
+        return {"ok": False, "issues": parse_issues, "warnings": []}
 
     dsl_version = obj.get("dsl_version")
     if not dsl_version:
-        warnings.append(f"缺少 dsl_version，已套用預設 {DEFAULT_DSL_VERSION}。")
+        issues.append("缺少 dsl_version。")
         dsl_version = DEFAULT_DSL_VERSION
     if not isinstance(dsl_version, str):
         issues.append("dsl_version 必須為字串。")
         dsl_version = str(dsl_version)
-    elif dsl_version not in ALLOWED_DSL_VERSIONS:
-        if str(dsl_version).startswith("sr-dsl/"):
-            warnings.append(f"dsl_version {dsl_version} 尚未驗證相容性，建議使用 {DEFAULT_DSL_VERSION}。")
-        else:
-            issues.append(f"dsl_version 不相容：{dsl_version}")
+    elif not dsl_version.startswith(ALLOWED_DSL_MAJOR):
+        issues.append(f"dsl_version 不相容：{dsl_version}")
+    elif dsl_version != DEFAULT_DSL_VERSION:
+        warnings.append(f"dsl_version {dsl_version} 尚未驗證相容性，建議使用 {DEFAULT_DSL_VERSION}。")
+
+    rule_id = obj.get("id")
+    if not rule_id or not isinstance(rule_id, str):
+        issues.append("id 必須為字串。")
+    name = obj.get("name")
+    if not name or not isinstance(name, str):
+        issues.append("name 必須為字串。")
+
+    raw_type = obj.get("type") or (rule.rule_type.value if isinstance(rule, Rule) else RuleType.HARD.value)
+    try:
+        rule_type = RuleType(str(raw_type).upper())
+    except Exception:
+        issues.append(f"type 不支援：{raw_type}。")
+        rule_type = RuleType.HARD
+
+    priority_val = obj.get("priority")
+    if priority_val is None:
+        issues.append("priority 必填。")
+        priority = 0
+    else:
+        try:
+            priority = int(priority_val)
+            if priority < 0:
+                issues.append("priority 必須為非負整數。")
+        except Exception:
+            issues.append("priority 必須為整數。")
+            priority = 0
+
+    enabled_val = obj.get("enabled")
+    if enabled_val is None:
+        issues.append("enabled 必填。")
+    elif not isinstance(enabled_val, bool):
+        issues.append("enabled 必須為布林值。")
+
+    tags_val = obj.get("tags")
+    if tags_val is not None and not (isinstance(tags_val, list) and all(isinstance(t, str) for t in tags_val)):
+        issues.append("tags 必須為字串陣列。")
+
+    notes_val = obj.get("notes")
+    if notes_val is not None and not isinstance(notes_val, str):
+        issues.append("notes 必須為字串。")
 
     scope_type, scope_id, scope_warnings = _parse_scope(obj, rule)
     warnings.extend(scope_warnings)
 
-    fallback_category = str(obj.get("category") or (rule.rule_type.value if isinstance(rule, Rule) else RuleType.HARD.value)).lower()
-    priority = int(obj.get("priority") or (rule.priority if rule else 0) or 0)
     constraints, constraint_issues, constraint_warnings = _extract_constraints_from_obj(
         obj,
-        fallback_category=fallback_category,
+        rule_type=rule_type,
         scope_type=scope_type,
         scope_id=scope_id,
         priority=priority,
@@ -709,33 +656,41 @@ def validate_dsl(dsl_text: str, *, session: Session | None = None, rule: Rule | 
     issues.extend(constraint_issues)
     warnings.extend(constraint_warnings)
 
-    _validate_body(obj, fallback_category, issues, warnings)
-
     # referential integrity checks
     shift_codes = _available_shift_codes(session)
     if shift_codes:
         for c in constraints:
             if c.shift_code and c.shift_code not in shift_codes:
                 issues.append(f"{c.name} 參照未知班別：{c.shift_code}")
-            if c.name == "prefer_off_after_night":
-                off_code = str(c.params.get("off_code") or "").strip()
-                if off_code and off_code not in shift_codes:
-                    issues.append(f"prefer_off_after_night 參照未知班別：{off_code}")
+            params = c.params or {}
+            shift_list = params.get("shift_codes")
+            if isinstance(shift_list, list):
+                for code in shift_list:
+                    if isinstance(code, str) and code and code not in shift_codes:
+                        issues.append(f"{c.name} 參照未知班別：{code}")
+            off_code = params.get("off_code")
+            if isinstance(off_code, str) and off_code and off_code not in shift_codes:
+                issues.append(f"{c.name} 參照未知班別：{off_code}")
 
     if session and scope_type == RuleScopeType.DEPARTMENT and scope_id:
-        if not session.get(Department, scope_id):
-            issues.append(f"scope_id={scope_id} 的科別不存在。")
+        dept = session.exec(select(Department).where(Department.code == scope_id)).first()
+        if not dept and scope_id.isdigit():
+            dept = session.get(Department, int(scope_id))
+        if not dept:
+            issues.append(f"scope.id={scope_id} 的科別不存在。")
     if session and scope_type == RuleScopeType.NURSE and scope_id:
-        nurse = session.get(Nurse, scope_id) if isinstance(scope_id, int) else None
+        nurse = session.exec(select(Nurse).where(Nurse.staff_no == scope_id)).first()
+        if not nurse and scope_id.isdigit():
+            nurse = session.get(Nurse, int(scope_id))
         if nurse is None:
-            issues.append(f"scope_id={scope_id} 的護理師不存在。")
+            issues.append(f"scope.id={scope_id} 的護理師不存在。")
 
     return {
         "ok": len(issues) == 0,
         "issues": issues,
         "warnings": warnings,
         "dsl_version": dsl_version,
-        "scope": {"scope_type": scope_type.value, "scope_id": scope_id},
+        "scope": {"type": scope_type.value, "id": scope_id},
         "normalized_constraints": [c.as_dict() for c in constraints],
     }
 

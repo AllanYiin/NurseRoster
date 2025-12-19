@@ -1,57 +1,75 @@
 from __future__ import annotations
 
-import json
+from textwrap import dedent
 
 from app.services import rules
 from app.models.entities import Department, Nurse, Project, Rule, RuleScopeType, RuleType, ShiftCode
 
 
+def _base_rule_yaml(*, rule_type: str, body: str, scope_type: str = "GLOBAL", scope_id: str | None = None) -> str:
+    scope_id_value = "null" if scope_id is None else scope_id
+    return dedent(
+        f"""
+        dsl_version: "1.0"
+        id: "R_GLOBAL_001"
+        name: "測試規則"
+        scope:
+          type: {scope_type}
+          id: {scope_id_value}
+        type: {rule_type}
+        priority: 1
+        enabled: true
+        tags: ["test"]
+        notes: "測試"
+        {body}
+        """
+    ).strip()
+
+
 def test_validate_dsl_success():
-    dsl = json.dumps(
-        {
-            "description": "每日白班至少兩人",
-            "constraints": [{"name": "daily_coverage", "shift": "D", "min": 2}],
-        }
+    dsl = _base_rule_yaml(
+        rule_type="HARD",
+        body=dedent(
+            """
+            constraints:
+              - id: "C1"
+                name: coverage_required
+                params:
+                  shift_codes: ["D"]
+                  required: 2
+            """
+        ).strip(),
     )
     result = rules.validate_dsl(dsl)
     assert result["ok"] is True
     assert result["issues"] == []
-    assert result["warnings"], "缺少 dsl_version 預期會有 warning"
+    assert result["warnings"] == []
 
 
 def test_validate_dsl_failure_on_invalid_json():
-    result = rules.validate_dsl("not json")
+    result = rules.validate_dsl("{not yaml")
     assert result["ok"] is False
-    assert any("JSON" in issue for issue in result["issues"])
+    assert any("DSL 解析失敗" in issue for issue in result["issues"])
 
 
-def test_validate_dsl_body_expression_success():
-    dsl = json.dumps(
-        {
-            "dsl_version": "sr-dsl/1.0",
-            "category": "hard",
-            "body": {
-                "type": "constraint",
-                "assert": {"op": "AND", "args": [True, {"op": "NOT", "args": [False]}]},
-            },
-        }
-    )
-    result = rules.validate_dsl(dsl)
-    assert result["ok"] is True
-    assert not result["issues"]
-
-
-def test_validate_dsl_body_with_unsupported_operator():
-    dsl = json.dumps(
-        {
-            "dsl_version": "sr-dsl/1.0",
-            "category": "hard",
-            "body": {"type": "constraint", "assert": {"op": "POWER", "args": [1, 2]}},
-        }
+def test_validate_dsl_forbidden_where_expression():
+    dsl = _base_rule_yaml(
+        rule_type="HARD",
+        body=dedent(
+            """
+            constraints:
+              - id: "C1"
+                name: coverage_required
+                where: assigned(nurse, day, "N")
+                params:
+                  shift_codes: ["N"]
+                  required: 1
+            """
+        ).strip(),
     )
     result = rules.validate_dsl(dsl)
     assert result["ok"] is False
-    assert any("未支援的 operator" in issue for issue in result["issues"])
+    assert any("不允許使用 assigned" in issue for issue in result["issues"])
 
 
 def test_stream_nl_to_dsl_events_uses_mock_when_no_key(monkeypatch):
@@ -66,21 +84,27 @@ def test_stream_nl_to_dsl_events_uses_mock_when_no_key(monkeypatch):
 
 
 def test_dsl_to_nl_generates_human_text():
-    dsl = json.dumps(
-        {
-            "description": "測試描述",
-            "constraints": [
-                {"name": "daily_coverage", "shift": "D", "min": 2},
-                {"name": "max_consecutive", "shift": "N", "max_days": 1},
-                {"name": "prefer_off_after_night"},
-            ],
-        }
+    dsl = _base_rule_yaml(
+        rule_type="HARD",
+        body=dedent(
+            """
+            constraints:
+              - id: "C1"
+                name: coverage_required
+                params:
+                  shift_codes: ["D"]
+                  required: 2
+              - id: "C2"
+                name: max_consecutive_work_days
+                params:
+                  max_days: 3
+            """
+        ).strip(),
     )
     text = rules.dsl_to_nl(dsl)
-    assert "測試描述" in text
-    assert "每天 D 班至少 2 人" in text
-    assert "N 班連續不得超過 1 天" in text
-    assert "大夜後偏好安排休假" in text
+    assert "HARD" in text
+    assert "coverage_required" in text
+    assert "max_consecutive_work_days" in text
 
 
 def test_validate_dsl_scope_and_shift_reference_errors(test_context):
@@ -92,16 +116,30 @@ def test_validate_dsl_scope_and_shift_reference_errors(test_context):
         session.add(ShiftCode(code="D", name="白班"))
         session.commit()
 
-        dsl = json.dumps(
-            {
-                "dsl_version": "sr-dsl/1.0",
-                "scope": {"scope_type": "department", "scope_id": 999},
-                "constraints": [
-                    {"name": "daily_coverage", "shift": "X", "min": 2},
-                    {"name": "prefer_off_after_night", "shift": "N", "params": {"off_code": "Z"}},
-                ],
-            }
-        )
+        dsl = dedent(
+            """
+            dsl_version: "1.0"
+            id: "R_DEPT_001"
+            name: "科別規則"
+            scope:
+              type: DEPARTMENT
+              id: ICU
+            type: HARD
+            priority: 1
+            enabled: true
+            constraints:
+              - id: "C1"
+                name: coverage_required
+                params:
+                  shift_codes: ["X"]
+                  required: 2
+              - id: "C2"
+                name: rest_after_shift
+                params:
+                  shift_codes: ["N"]
+                  off_code: "Z"
+            """
+        ).strip()
 
         result = rules.validate_dsl(dsl, session=session)
 
@@ -110,21 +148,20 @@ def test_validate_dsl_scope_and_shift_reference_errors(test_context):
     assert any("科別不存在" in issue for issue in result["issues"])
 
 
-def test_validate_dsl_soft_body_warns_weight_and_forbidden_function():
-    dsl = json.dumps(
-        {
-            "dsl_version": "sr-dsl/1.0",
-            "category": "soft",
-            "body": {
-                "type": "objective",
-                "penalty": {"fn": "format_date", "args": {"date": "2024-01-01"}},
-            },
-        }
+def test_validate_dsl_objective_requires_weight():
+    dsl = _base_rule_yaml(
+        rule_type="SOFT",
+        body=dedent(
+            """
+            objectives:
+              - id: "O1"
+                name: prefer_off_on_weekends
+            """
+        ).strip(),
     )
     result = rules.validate_dsl(dsl)
-    assert result["ok"] is True
-    assert any("建議設定 weight" in warning for warning in result["warnings"])
-    assert any("僅供解釋/UI" in warning for warning in result["warnings"])
+    assert result["ok"] is False
+    assert any("必須提供 weight" in issue for issue in result["issues"])
 
 
 def test_resolve_project_rules_overrides_and_conflicts(test_context):
@@ -146,11 +183,20 @@ def test_resolve_project_rules_overrides_and_conflicts(test_context):
             scope_type=RuleScopeType.GLOBAL,
             rule_type=RuleType.HARD,
             priority=1,
-            dsl_text=json.dumps(
-                {
-                    "dsl_version": "sr-dsl/1.0",
-                    "constraints": [{"name": "daily_coverage", "shift": "D", "min": 2}],
-                }
+            dsl_text=_base_rule_yaml(
+                rule_type="HARD",
+                body=dedent(
+                    """
+                    constraints:
+                      - id: "C1"
+                        name: coverage_required
+                        params:
+                          shift_codes: ["D"]
+                          required: 2
+                    """
+                ).strip(),
+                scope_type="GLOBAL",
+                scope_id=None,
             ),
             is_enabled=True,
         )
@@ -161,11 +207,20 @@ def test_resolve_project_rules_overrides_and_conflicts(test_context):
             scope_id=dept.id,
             rule_type=RuleType.HARD,
             priority=2,
-            dsl_text=json.dumps(
-                {
-                    "dsl_version": "sr-dsl/1.0",
-                    "constraints": [{"name": "daily_coverage", "shift": "D", "min": 1}],
-                }
+            dsl_text=_base_rule_yaml(
+                rule_type="HARD",
+                body=dedent(
+                    """
+                    constraints:
+                      - id: "C1"
+                        name: coverage_required
+                        params:
+                          shift_codes: ["D"]
+                          required: 1
+                    """
+                ).strip(),
+                scope_type="DEPARTMENT",
+                scope_id=dept.code,
             ),
             is_enabled=True,
         )
@@ -175,11 +230,20 @@ def test_resolve_project_rules_overrides_and_conflicts(test_context):
             scope_type=RuleScopeType.GLOBAL,
             rule_type=RuleType.SOFT,
             priority=1,
-            dsl_text=json.dumps(
-                {
-                    "dsl_version": "sr-dsl/1.0",
-                    "constraints": [{"name": "prefer_off_after_night", "shift": "N", "weight": 3}],
-                }
+            dsl_text=_base_rule_yaml(
+                rule_type="SOFT",
+                body=dedent(
+                    """
+                    objectives:
+                      - id: "O1"
+                        name: prefer_shift
+                        weight: 3
+                        params:
+                          shift_codes: ["N"]
+                    """
+                ).strip(),
+                scope_type="GLOBAL",
+                scope_id=None,
             ),
             is_enabled=True,
         )
@@ -190,11 +254,20 @@ def test_resolve_project_rules_overrides_and_conflicts(test_context):
             scope_id=nurse.id,
             rule_type=RuleType.SOFT,
             priority=3,
-            dsl_text=json.dumps(
-                {
-                    "dsl_version": "sr-dsl/1.0",
-                    "constraints": [{"name": "prefer_off_after_night", "shift": "N", "weight": 5}],
-                }
+            dsl_text=_base_rule_yaml(
+                rule_type="SOFT",
+                body=dedent(
+                    """
+                    objectives:
+                      - id: "O1"
+                        name: prefer_shift
+                        weight: 5
+                        params:
+                          shift_codes: ["N"]
+                    """
+                ).strip(),
+                scope_type="NURSE",
+                scope_id=nurse.staff_no,
             ),
             is_enabled=True,
         )
@@ -206,11 +279,11 @@ def test_resolve_project_rules_overrides_and_conflicts(test_context):
 
         merged, conflicts = rules.resolve_project_rules(session, project.id)
 
-    coverage_rule = next((c for c in merged if c.name == "daily_coverage"), None)
+    coverage_rule = next((c for c in merged if c.name == "coverage_required"), None)
     assert coverage_rule is not None
-    assert coverage_rule.params.get("min") == 2
+    assert coverage_rule.params.get("required") == 2
     assert any("覆寫較寬鬆" in c.get("message", "") for c in conflicts)
 
-    prefer_rule = next((c for c in merged if c.name == "prefer_off_after_night"), None)
+    prefer_rule = next((c for c in merged if c.name == "prefer_shift"), None)
     assert prefer_rule is not None
     assert prefer_rule.weight == 5

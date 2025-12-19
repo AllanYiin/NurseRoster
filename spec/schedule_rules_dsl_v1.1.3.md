@@ -1,615 +1,478 @@
-# Schedule Rules DSL v1.1.3 完整規格
-
-以下提供「本排班系統專用 DSL（Schedule Rules DSL）」的完整 v1 詳盡規格：包含語法/結構、型別系統、完整運算子、完整函數（內建函數庫）、可做的操作、規範與驗證規則、分層覆寫語意。設計目標：可機器驗證、可編譯到 OR-Tools CP-SAT、可反向翻譯、不可含隱式歧義。
-
----
-
-## 1. DSL 的定位與設計原則
-
-### 1.1 設計目標
-
-* **可驗證**：100% JSON 結構 + Schema（Pydantic/JSON Schema）驗證。
-* **可編譯**：每條規則都能映射為 Hard/Soft/Preference（constraint 或 penalty）。
-* **可解釋**：每個 operator/function 都有 deterministic `explain()` 模板，支援 DSL→NL。
-* **非圖靈完備**：不支援任意迴圈/遞迴，只支援**有界**量化/聚合。
-
-### 1.2 資料面向
-
-* `Nurse`, `Date`, `Shift`, `Dept`, `Assignment`, `LockedAssignment`, `Codes`。
-
----
-
-## 2. Rule Document（JSON 物件）
-
-建議完整欄位：
-
-```json
-{
-  "dsl_version": "sr-dsl/1.0",
-  "rule_id": "uuid-or-string",
-  "name": "最大連續上班天數",
-  "description": "全域硬性限制",
-  "enabled": true,
-  "scope": { "scope_type": "global|hospital|dept|nurse", "dept_id": null, "nurse_id": null },
-  "category": "hard|soft|preference",
-  "priority": 100,
-  "parameters": {},
-  "body": {
-    "type": "constraint|objective",
-    "when": {},
-    "assert": {},
-    "penalty": {},
-    "reward": {},
-    "weight": 5,
-    "severity": "warn|error",
-    "tags": ["fatigue","law"]
-  }
-}
-```
-
-* `constraint`：必須有 `assert`；`objective`：必須有 `penalty` 或 `reward`。
-* Hard：`category=hard` 且 `body.type=constraint`。
-* Soft/Preference：`category in (soft, preference)` 且 `body.type=objective`。
-
----
-
-## 3. 型別系統
-
-* 基本：`bool/int/number/string/date/time/duration`
-* Domain：`nurse_ref/dept_ref/shift_ref/rank_ref/set<T>/list<T>`
-* 推導：邏輯→bool、比較→bool、聚合→int/number、日期函數→date/int/bool。
-
----
-
-## 4. 表達式語法（JSON AST）
-
-* Operator：`{ "op": "OP_NAME", "args": [ ... ] }`
-* Function：`{ "fn": "function_name", "args": { "param": "..." } }`
-* v1 規範：operator 用 `op`+陣列，function 用 `fn`+物件，不可混用。
-
----
-
-## 5. 運算子清單
-
-邏輯、比較、算術、集合、條件、量化、字串共 45 個：
-
-* 邏輯：AND/OR/NOT/XOR/IMPLIES/IFF
-* 比較：EQ/NE/GT/GTE/LT/LTE/IN/BETWEEN
-* 算術：ADD/SUB/MUL/DIV/MOD/ABS/MIN/MAX/CLAMP/ROUND
-* 集合：SET/UNION/INTERSECT/DIFF/SIZE/CONTAINS/DISTINCT/SORT
-* 條件：IF/COALESCE/IS_NULL
-* 量化：FORALL/EXISTS/COUNT_IF/SUM/MIN_OF/MAX_OF
-* 字串：CONCAT/LOWER/UPPER/MATCH
-
----
-
-## 6. Domain Iterator
-
-格式：`{"iter":"NURSES|DATES|SHIFTS|ASSIGNMENTS","where":bool_expr}`。`where` 只允許邏輯/比較/純查詢函數。
-
----
-
-## 7. Lambda
-
-格式：`{"lambda":["n","d"],"body":expr}`。參數依 iterator：NURSES→["n"], DATES→["d"], ASSIGNMENTS→["n","d"], SHIFTS→["s"].
-
----
-
-## 8. 函數清單
-
-* Assignment：shift_assigned, assigned_shift, is_work_shift, is_off_shift
-* 資格：in_dept, has_rank_at_least, employment_type_is, nurse_is_active
-* 日期：day_of_week, is_weekend, is_holiday, week_of_period, date_add, date_diff_days
-* 序列：count_consecutive_work_days, has_sequence, rest_minutes_between
-* Coverage：coverage_count, required_coverage, coverage_shortage
-* 公平：count_shifts_in_period, count_weekend_shifts, deviation_from_mean
-* 目標輔助：penalty_if, penalty_per_occurrence, reward_if
-* Explain/UI（不可進 solver）：format_date, format_shift, lookup_nurse_name, explain_expr
-
----
-
-## 9. 可做的操作
-
-* Hard：一日一班、連續上班天數上限、休息時間、夜班上限、coverage 達成、技能 mix、不可上班日、鎖定格。
-* Soft/Preference：偏好班別/休假、避免序列、夜班/假日公平、允許缺口但有 penalty。
-* 分層覆寫：soft 可覆寫 weight/params；hard 只能加嚴。
-
----
-
-## 10. 規範與驗證
-
-* JSON Schema 驗證：必含 dsl_version/scope/category/body；hard 不得帶 weight；soft/preference 必帶 weight。
-* Domain 驗證：引用的 dept/nurse/shift/rank 必須存在，日期落在期間，序列 shift 存在。
-* Compile 驗證：不得包含不可編譯函數（regex/lookup/explain 等），量化 domain 有界，assigned_shift 不可直接進 solver。
-* 決定性：相同輸入 + seed 必可重現。
-
----
-
-## 11. Guard 與 Assert/Penalty
-
-* `when=false`：constraint 不施加；objective penalty/reward=0。
-* `assert` 必為 bool；`penalty/reward` 必為 number。
-
----
-
-## 12. 範例
-
-* 最大連續上班天數（Hard）：使用 FORALL ASSIGNMENTS + count_consecutive_work_days。
-* 夜班至少 1 位 N2+（Hard Coverage）：FORALL DATES + coverage_count + has_rank_at_least。
-* 避免 D→N（Soft）：SUM NURSES/DATES + penalty_if。
-
----
-
-## 13. 分層合併
-
-* semantic_key 決定同義規則，可覆寫/加嚴。
-* 順序：global→hospital→dept→nurse，priority desc。
-* Hard 加嚴判定：MAX 越小越嚴、MIN 越大越嚴、coverage 越大越嚴、禁止集合越多越嚴；放寬需阻擋。
-
----
-
-## 14. 反向翻譯規範
-
-* 每個 op/fn 需有 explain_template_zh、param_labels、example。
-* 流程：normalize → extract_intent → render。不得用 lookup 類修改語意。
-
----
-
-## 15. 實作建議
-
-* 用 Pydantic 定義 RuleDoc/Expr/Iterator/Lambda。
-* 兩階段編譯：DSL→IR（ConstraintIR/ObjectiveIR）→ CP-SAT。
-* solver_support 白名單，禁止 regex/sort/lookup/explain 等進 constraint/objective。
-* 不可編譯者僅供 UI/Debug/Explain。
-
----
-
-## 16. JSON Schema（sr-dsl/1.0）
-
-建議檔名：`schemas/sr-dsl-1.0.schema.json`，可直接用於後端驗證。包含 Scope/Body/Expr/OpExpr/FnExpr/DomainIterator/Lambda/Literal 定義；依 category/type 互斥約束；禁止 objective 缺 weight 等。完整內容請依上方規格展開。
-
----
-
-## 17. Explain 模板（zh）
-
-建議檔名：`dsl_explain/zh_TW_templates.json`。
-
-* Operators：AND/OR/NOT… 至 MATCH，皆含 summary/render（中文）。
-* Functions：shift_assigned、assigned_shift、coverage_count… explain label/params/render。
-* Explain 輸出：summary + details + assumptions。
-
----
-
-## 18. DSL → IR 規格
-
-* RuleIR：包含 scope/category/priority/guard + constraint/objective。
-* BoolIR：and/or/not、比較、量化（展開）、atom（布林變數）。
-* Int/NumIR：線性運算、count/sum 展開；objective 必須可線性化。
-* ConstraintIR：線性不等式或高階型（one_shift_per_day/coverage_min/max_consecutive…）。
-* ObjectiveIR：weighted_sum + reified_penalty 等，常見型避免序列/公平/coverage_shortage。
-
----
-
-## 19. 編譯規範
-
-* 白名單：AND/OR/NOT、比較、ADD/SUB/MUL(常數)、IF(可線性化)、FORALL/COUNT_IF/SUM、shift_assigned/in_dept/has_rank_at_least/is_weekend/date_add/coverage_count/penalty_if/penalty_per_occurrence/reward_if。
-* 禁止：MATCH、SORT、format_*、lookup_nurse_name、explain_expr、assigned_shift（未展開）。
-* 展開：FORALL → 多條 constraint；coverage_count → Σx；penalty_if → reified 變數進 objective。
-
----
-
-## 20. 配套檔案建議
-
-* `dsl_runtime/solver_support.json`：op/fn solver_support 標註。
-* `dsl_samples/*.json`：常見規則範例，供 NL→DSL/回歸測試。
-
----
-
 # 規格整理 v 1.1.3
 
-下面把「實務常見但目前 DSL 缺少/有限支援」補進 DSL v1.x 的擴充設計：**新增規則型態（HARD/SOFT）、語法、params、語意、以及 CP-SAT 編譯方式**。我會盡量用「可直接落地」的模板，讓你只要在 `ConstraintParamsDispatch / ObjectiveParamsDispatch` 與 `compile_constraints.py / compile_objectives.py` 增補對應分支就能上線。
+以下是一份針對「**護理師排班系統**」專用的 **DSL 詳盡技術規格文件**（v1.0）。內容涵蓋：
+
+* DSL 檔案結構（Rule / Constraint / Objective）
+* **完整運算子**、優先序、型別規則
+* **完整函數清單**（含可編譯/不可編譯、用途、回傳型別）
+* 可做的操作（硬限制、軟目標、偏好、分層覆寫、鎖定/提示）
+* 語法規範（YAML 規格、Expression Grammar、保留字、命名）
+* 驗證規範（schema、語意、可編譯性、整包檢查）
+* 編譯到 CP-SAT 的限制與最佳實務
+
+> 本文件以「**可落地（可編譯）**」為設計中心：
+> 任何 DSL 表達都要能被 deterministic 地轉成 IR，再轉 CP-SAT（OR-Tools）限制式或成本項。
 
 ---
 
-## A. 週末休假頻率要求（每兩週至少一個完整週末休假）
+## 1. DSL 概觀與使用情境
 
-### A1. 新增 HARD Constraint：`min_full_weekends_off_in_window`
+### 1.1 DSL 在系統中的角色
 
-**用途**：在任意（或以固定週期切分的）窗口內，要求「完整週末 OFF」的次數達到最低值。
+* 規則輸入：自然語言 →（LLM）→ DSL（存檔）
+* 規則驗證：DSL → schema/語意/可編譯檢查
+* 求解：Rule Bundle（本期規則集快照）內所有 DSL 編譯成 CP-SAT 模型
+* 反向翻譯：DSL →（Translator）→ 自然語言（供使用者確認）
 
-**DSL**
+### 1.2 DSL 設計的核心限制（務必遵守）
 
-```yaml
-constraints:
-  - id: "C_WEEKEND_OFF_FREQ"
-    name: min_full_weekends_off_in_window
-    params:
-      window_days: 14                # 14天窗口（兩週）
-      min_full_weekends_off: 1       # 至少1個完整週末OFF
-      weekend_def: "SAT_SUN"         # v1：固定SAT+SUN
-      off_code: "OFF"                # 可省略，用ctx判斷is_off
-      sliding: true                  # true=任意連續14天都要滿足；false=按period切塊
-```
-
-**語意**
-
-* 「完整週末 OFF」定義：週六與週日都 OFF。
-* `sliding=true`：任意連續 `window_days` 天內，完整週末 OFF 次數 ≥ min。
-* `sliding=false`：以 period 起點切成不重疊窗口（較寬鬆、較符合排班週期）。
-
-**CP-SAT 編譯（核心）**
-
-* 先對每位護理師 n、每個週末 w（週六日對）定義：
-
-  * `fullWeekendOff[n,w]` Bool
-  * 線性化：`fullWeekendOff <= offSat`, `fullWeekendOff <= offSun`, `fullWeekendOff >= offSat + offSun - 1`
-  * 其中 `offSat = x[n,sat,OFF]`，`offSun = x[n,sun,OFF]`
-* 再對窗口（sliding 或 block）加：
-
-  * `Σ fullWeekendOff[n,w in window] >= min_full_weekends_off`
-
-> 實作提示：需要 `calendar_index` 能找出每個週六對應的週日（跨月仍可）。
+* **可編譯性優先**：避免需要先知道解的函數（如 `shift_of`）用在求解階段
+* **確定性**：相同 DSL + 相同 input + 相同 seed ⇒ 可重現結果（在 solver 設定固定時）
+* **分層管理**：LAW / HOSPITAL / TEMPLATE / NURSE_PREF 由 Bundle 決定，DSL 本體不含 layer（layer 是 bundle item metadata）
 
 ---
 
-## B. 完整週末原則（要嘛整個週末上班，要嘛整個週末都休）
+## 2. DSL 檔案格式（YAML）結構規範
 
-### B1. 新增 HARD Constraint：`weekend_all_or_nothing`
+### 2.1 Rule Root
 
-**用途**：避免只休週六但週日上班（或相反），要求週末兩天「同為 OFF 或同為 WORK」。
-
-**DSL**
-
-```yaml
-constraints:
-  - id: "C_WEEKEND_ALL_OR_NOTHING"
-    name: weekend_all_or_nothing
-    params:
-      weekend_def: "SAT_SUN"
-      mode: "OFF_OR_WORK"     # v1固定：兩天同態（都OFF或都工作）
-```
-
-**語意**
-
-* 對每位 n、每個週末（sat,sun）：
-
-  * `is_off(n,sat) == is_off(n,sun)`
-    等價：不允許 OFF/WORK 不一致。
-
-**CP-SAT**
-
-* `offSat = x[n,sat,OFF]`, `offSun = x[n,sun,OFF]`
-* 加 constraint：`offSat == offSun`
-
-> 變體（可擴充）：如果你想允許「兩天都同一班別類型」也可加 mode，但 v1 先做同 OFF/WORK 最常用。
-
----
-
-## C. 最低連休天數（避免單日休假）
-
-### C1. 新增 HARD Constraint：`min_consecutive_off_days`
-
-**用途**：只要開始休假，就至少連休 K 天；避免 Work–OFF–Work 的單日休。
-
-**DSL**
-
-```yaml
-constraints:
-  - id: "C_MIN_CONSEC_OFF"
-    name: min_consecutive_off_days
-    params:
-      min_days: 2                 # 至少連休2天
-      apply_to: "ALL"             # v1 可保留
-      allow_at_period_edges: true # period頭尾若不足K天，是否放寬
-```
-
-**語意（常見實務）**
-
-* 若某天為 OFF 且前一天不是 OFF（休假區段開始），則後面 `min_days-1` 天必為 OFF。
-
-**CP-SAT（線性化）**
-
-* 定義 `off[n,d] = x[n,d,OFF]`
-* 定義 `startOff[n,d]`：當天是 OFF 且前一天非 OFF
-
-  * `startOff <= off[d]`
-  * `startOff <= 1 - off[d-1]`（d>0）
-  * `startOff >= off[d] - off[d-1]`
-* 對每個 startOff：
-
-  * `off[n,d+r] >= startOff[n,d]` for r=1..min_days-1
-* `allow_at_period_edges=true`：若 `d+r` 超出 period，則跳過該條（或改成 block 模式只檢查完整可檢窗口）。
-
-### C2. 新增 SOFT Objective：`penalize_single_off_day`
-
-**用途**：不強制，但盡量避免單日 OFF（更彈性）。
-
-**DSL**
-
-```yaml
-objectives:
-  - id: "O_AVOID_SINGLE_OFF"
-    name: penalize_single_off_day
-    weight: 10
-    params:
-      penalty: 1
-```
-
-**CP-SAT**
-
-* 對每 n,d（d-1,d,d+1 都存在）定義 `singleOff`：
-
-  * `singleOff = off[d] AND (1-off[d-1]) AND (1-off[d+1])`
-* cost += weight * penalty * singleOff
-
----
-
-## D. 每週工時或班數上限（任意7天內最多工作5天等）
-
-> 你其實已經有 `max_assignments_in_window`，但要補齊兩個缺口：
-
-1. **週期滑動窗口**（任意 7 天）要成為一級規則（更常用、更清楚）
-2. **不同合約（全職/兼職）** 需 per-nurse params（或 job_level/contract_group）
-
-### D1. 新增 HARD Constraint：`max_work_days_in_rolling_window`
-
-**DSL**
-
-```yaml
-constraints:
-  - id: "C_MAX_5_IN_7"
-    name: max_work_days_in_rolling_window
-    params:
-      window_days: 7
-      max_work_days: 5
-      include_shifts: ["D","E","N"]   # 工作班別
-      sliding: true                   # 任意連續7天
-```
-
-**CP-SAT**
-
-* `work[n,d] = Σ_{s in include_shifts} x[n,d,s]`
-* 對每 n、每個 start：`Σ_{k=0..W-1} work[n,start+k] <= max_work_days`
-
-### D2. per-nurse / per-contract 變體（推薦做法）
-
-新增一種 params 形式（擇一）：
-
-**方式 1：rule 用 where + 多條規則**
-
-```yaml
-where: job_level(nurse) in {"PT"}     # 兼職群組（示例）
-params: { window_days: 7, max_work_days: 3, include_shifts: ["D","E","N"], sliding: true }
-```
-
-**方式 2：params 直接帶 mapping（更省 rule 數）**
-
-```yaml
-params:
-  window_days: 7
-  include_shifts: ["D","E","N"]
-  max_work_days_by_group:
-    FULLTIME: 5
-    PARTTIME: 3
-  nurse_group_field: "contract_type"
-```
-
-> v1 建議先用方式 1（簡單、少 parser 功能），方式 2 放 v1.2。
-
----
-
-## E. 週末班分配公平（不是「盡量週末OFF」，而是公平）
-
-你已經有 `balance_weekend_work`（我前面 demo 補過），但你指出「目前 DSL 沒有明確內建」，所以這裡把它正式納入 **Objective 枚舉**，並補上兩種公平形式：**range** 與 **target-based**。
-
-### E1. 新增 SOFT Objective：`balance_weekend_shift_count`
-
-**DSL**
-
-```yaml
-objectives:
-  - id: "O_BAL_WEEKEND"
-    name: balance_weekend_shift_count
-    weight: 25
-    params:
-      weekend_days: "SAT_SUN"      # or "HOLIDAY"（擴充）
-      shifts: ["D","E","N"]        # 哪些算「週末班」
-      metric: "range"              # v1 建議 range (max-min)
-```
-
-**CP-SAT**
-
-* 計算每人週末工作次數 `cnt[n]`
-* 定義 `maxC/minC`，cost += (maxC - minC) * weight
-
-### E2. 目標值（target）變體（v1.2）
-
-```yaml
-metric: "target"
-target_per_nurse: 2
-penalty_per_diff: 1
-```
-
-* cost += |cnt[n] - target|（需要 abs 線性化）
-
----
-
-## F. 新人與資深搭配（條件式規則）
-
-你已有 `skill_coverage`（每班至少一位具技能），但「新人在場 → 必有資深」是 **條件式**。補一條硬規則：
-
-### F1. 新增 HARD Constraint：`if_novice_present_then_senior_present`
-
-**DSL**
-
-```yaml
-constraints:
-  - id: "C_NOVICE_SENIOR_PAIR"
-    name: if_novice_present_then_senior_present
-    params:
-      department_id: "ICU"
-      shifts: ["D","E","N"]          # 哪些班適用
-      novice_group:                  # 新人定義（擇一）
-        by_job_levels: ["N1"]
-      senior_group:
-        by_job_levels: ["N3","N4"]
-      min_senior: 1
-      trigger_if_novice_count_ge: 1  # 只要有 >=1 新人就觸發
-```
-
-**語意**
-
-* 對每一天 d、每個 shift s：
-
-  * 若該班別有新人（>= trigger），則該班別資深數量 >= min_senior
-
-**CP-SAT（線性化）**
-
-* 定義：
-
-  * `novCnt[d,s] = Σ_{n in novice} x[n,d,s]`
-  * `senCnt[d,s] = Σ_{n in senior} x[n,d,s]`
-* 定義 trigger bool `t[d,s]`：`novCnt >= trigger`
-
-  * CP-SAT 可用 reified：`model.Add(novCnt >= trigger).OnlyEnforceIf(t)`
-  * 以及 `model.Add(novCnt < trigger).OnlyEnforceIf(t.Not())`
-* 再加：`model.Add(senCnt >= min_senior).OnlyEnforceIf(t)`
-
-> v1 若你要更簡單：直接要求每個班次 `senCnt >= 1`（不管新人在不在），但會太硬。建議用上述條件式。
-
----
-
-## G. 避免同一護理師連續太多天排同一班別（輪班變化）
-
-### G1. 新增 HARD Constraint：`max_consecutive_same_shift`
-
-**DSL**
-
-```yaml
-constraints:
-  - id: "C_MAX_SAME_SHIFT"
-    name: max_consecutive_same_shift
-    params:
-      shift_codes: ["D","E","N"]     # OFF 通常不算
-      max_days: 3
-```
-
-**CP-SAT**
-
-* 對每 shift t ∈ shift_codes：
-
-  * `twork[n,d] = x[n,d,t]`
-  * 對每 n、每個 start：`Σ_{k=0..max_days} twork[n,start+k] <= max_days`
-    （禁止連續 max_days+1 天都是同一班）
-
-### G2. SOFT 版本（偏好輪替）
-
-`penalize_consecutive_same_shift`：每次連續超過 M 就加罰（v1 可先不做，硬規則較直觀）
-
----
-
-## H. 跨科支援 / 輪調頻率限制（同人不同病房輪調太頻繁）
-
-這一類需要你排班變數不只決定 shift，還要決定 **department assignment**。目前你的核心變數是 `x[n,day,shift]`，如果你允許跨科支援，建議擴成：
-
-* `x[n,day,dept,shift] ∈ {0,1}`
-  且每日 sum(dept,shift)=1（或 dept + OFF 特判）
-
-> 如果 v1 暫不做跨科支援，就把這條列為 v1.2；但你要求先補 DSL 型態，我這裡給「可擴充語法」與編譯前置條件。
-
-### H1. 新增 HARD Constraint（v1.2 起）：`max_department_switches_in_window`
-
-**DSL**
-
-```yaml
-constraints:
-  - id: "C_DEPT_SWITCH_LIMIT"
-    name: max_department_switches_in_window
-    params:
-      window_days: 14
-      max_switches: 2
-      departments: ["ICU","ER"]         # 支援的輪調集合
-      count_off_as_no_dept: true
-```
-
-**語意**
-
-* 在任意 14 天內，某護理師「部門切換次數」不超過 2。
-
-**CP-SAT（需要 dept 變數）**
-
-* 定義 `deptOf[n,d]`（或 one-hot `y[n,d,dept]`）
-* 定義 `sw[n,d]` 表示 d-1 到 d 是否切換：
-
-  * `sw[n,d] >= y[n,d,dept] - y[n,d-1,dept]` 需要更完整線性化（one-hot switch 常用：`sw >= 1 - Σ_{dept} (y[d,dept] AND y[d-1,dept])`）
-* 窗口限制：`Σ sw <= max_switches`
-
-> v1 若你想暫不擴變數，可以把「跨科」視為技能/資格而不是 dept 維度，就不會有切換概念。
-
----
-
-## I. DSL 擴充清單總表（新增 name）
-
-把你 DSL 的枚舉擴充如下：
-
-### I1. 新增 HARD constraints（name）
-
-* `min_full_weekends_off_in_window`
-* `weekend_all_or_nothing`
-* `min_consecutive_off_days`
-* `max_work_days_in_rolling_window`
-* `if_novice_present_then_senior_present`
-* `max_consecutive_same_shift`
-* （v1.2）`max_department_switches_in_window`（需要 dept 維度變數）
-
-### I2. 新增 SOFT objectives（name）
-
-* `penalize_single_off_day`
-* `balance_weekend_shift_count`（或 `balance_weekend_shift_count`/`balance_weekend_work` 統一命名其一）
-* `penalize_consecutive_same_shift`（可選）
-* （v1.2）`minimize_department_switches`（偏好少輪調）
-
----
-
-## J. JSON Schema 與 Compiler 要改哪裡（最少改動）
-
-### J1. schema_v1.json
-
-* 在 `Constraint.name enum` 加上新 constraints
-* 在 `Objective.name enum` 加上新 objectives
-* 在 `ConstraintParamsDispatch` / `ObjectiveParamsDispatch` 追加對應 if/then params schema
-
-### J2. compile_constraints.py / compile_objectives.py
-
-* `compile_hard()` 加 switch case
-* `compile_soft()` 加 switch case
-* 增加 `weekend_pairs` 的工具函式（依 days 生成週末 sat->sun 的 index）
-
----
-
-## K. 立即可用的 DSL 範例（把新規則用起來）
-
-### K1. 「兩週至少一個完整週末休」+「週末要嘛全休要嘛全上」+「至少連休2天」
+每份 DSL 文件描述「一條規則版本」：
 
 ```yaml
 dsl_version: "1.0"
-id: "R_DEPT_WEEKEND_POLICY"
-name: "Weekend rest policy"
-scope: { type: DEPARTMENT, id: "ICU" }
-type: HARD
-priority: 90
-enabled: true
-constraints:
-  - id: "C1"
-    name: min_full_weekends_off_in_window
-    params: { window_days: 14, min_full_weekends_off: 1, weekend_def: "SAT_SUN", sliding: true }
-    message: "每14天至少有1個完整週末休假"
-  - id: "C2"
-    name: weekend_all_or_nothing
-    params: { weekend_def: "SAT_SUN", mode: "OFF_OR_WORK" }
-    message: "週末要嘛兩天都休，要嘛兩天都上班"
-  - id: "C3"
-    name: min_consecutive_off_days
-    params: { min_days: 2, allow_at_period_edges: true }
-    message: "休假至少連休2天"
+id: "R_..."
+name: "..."
+scope:
+  type: GLOBAL | HOSPITAL | DEPARTMENT | NURSE
+  id: null | "H001" | "ICU" | "N021"
+type: HARD | SOFT | PREFERENCE
+priority: 0..100000
+enabled: true | false
+tags: ["..."]
+notes: "..."
+
+constraints: []   # type=HARD 時使用
+objectives: []    # type=SOFT/PREFERENCE 時至少一條
+```
+
+### 2.2 Constraint 與 Objective 結構
+
+**Constraint**
+
+```yaml
+- id: "C1"
+  name: <constraint_name_enum>
+  for_each: <iterator>   # v1 可省略（多數用 targets 展開即可）
+  where: <expr>          # v1 建議僅用於「展開時過濾」，不進 solver
+  params: { ... }        # 依 name 決定 schema
+  message: "..."
+```
+
+**Objective**
+
+```yaml
+- id: "O1"
+  name: <objective_name_enum>
+  weight: 0..100000
+  for_each: <iterator>
+  where: <expr>
+  params: { ... }
+  message: "..."
+```
+
+---
+
+## 3. 命名規範與保留字
+
+### 3.1 ID 規範
+
+* `id`（rule）：建議 `R_<SCOPE>_<NNN>`
+* `constraints[].id`：`C1`, `C2`…
+* `objectives[].id`：`O1`, `O2`…
+
+### 3.2 允許字元
+
+* `id`：`[A-Za-z0-9_\-]+`
+* scope id：依資料表（department_id、nurse_id）
+
+### 3.3 保留字（Expression 中不可用作變數名）
+
+`and, or, not, in, true, false, null`
+
+---
+
+## 4. 型別系統（Expression）
+
+### 4.1 原生型別
+
+* `bool`
+* `int`
+* `float`
+* `string`
+* `date`
+* `time`
+* `duration`（v1 以 minutes 的 int 表示）
+* `nurse`（物件）
+* `shift`（物件）
+* `set<T>`
+* `list<T>`
+
+### 4.2 物件欄位（dot access）
+
+* `nurse.id: string`
+* `nurse.name: string`
+* `nurse.department_id: string`
+* `nurse.job_level: string`
+* `nurse.skills: list<string>`
+* `shift.code: string`
+* `shift.is_off: bool`
+* `shift.start_time/end_time: time`（若有）
+
+### 4.3 Literal 表示
+
+* string：`"ICU"`
+* int：`123`
+* float：`1.25`
+* bool：`true` / `false`
+* null：`null`
+* set：`{"D","E","N"}`
+* list：`["ICU","ER"]`
+* date：`date("2026-01-01")`
+
+---
+
+## 5. Expression 語法規範（完整）
+
+### 5.1 運算子（完整清單）
+
+#### 5.1.1 布林運算子
+
+* `not <bool>`
+* `<bool> and <bool>`
+* `<bool> or <bool>`
+
+#### 5.1.2 比較運算子
+
+* `==`, `!=`, `<`, `<=`, `>`, `>=`
+
+#### 5.1.3 數值運算子
+
+* `+`, `-`, `*`, `/`, `%`
+* 一元負號：`-x`
+
+#### 5.1.4 集合/成員運算子
+
+* `x in {"A","B"}`
+* `x not in {"A","B"}`
+
+> v1 建議：`in` 用於 `string/int` 對 `set/list`，不要混用複雜型別。
+
+### 5.2 優先序（由高到低）
+
+1. `(...)`
+2. `not`, unary `-`
+3. `* / %`
+4. `+ -`
+5. `== != < <= > >= in not in`
+6. `and`
+7. `or`
+
+### 5.3 EBNF（完整）
+
+```ebnf
+expr        := orExpr ;
+orExpr      := andExpr ( "or" andExpr )* ;
+andExpr     := cmpExpr ( "and" cmpExpr )* ;
+cmpExpr     := addExpr ( ( "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "not in" ) addExpr )* ;
+addExpr     := mulExpr ( ( "+" | "-" ) mulExpr )* ;
+mulExpr     := unaryExpr ( ( "*" | "/" | "%" ) unaryExpr )* ;
+unaryExpr   := ( "not" | "-" ) unaryExpr | primary ;
+primary     := literal | ident | funcCall | "(" expr ")" ;
+funcCall    := ident "(" ( expr ( "," expr )* )? ")" ;
+ident       := /[A-Za-z_][A-Za-z0-9_.]*/ ;
+literal     := number | string | "true" | "false" | "null" | setLit | listLit ;
+setLit      := "{" ( expr ( "," expr )* )? "}" ;
+listLit     := "[" ( expr ( "," expr )* )? "]" ;
+```
+
+---
+
+## 6. Expression 的「可編譯性」規範（重要）
+
+Expression 可能出現在：
+
+* `where:`（過濾展開 targets）
+* 部分 params（例如 shifts list、dates list —— v1 多數用 literal，不建議在 params 寫運算）
+
+### 6.1 分級
+
+* **Filter-only 表達式**：只能用於展開/過濾（不進 solver）
+
+  * 例：`dept(nurse) == "ICU"`
+* **Solver-compilable 表達式**：可被編譯成線性限制（v1 先不開放自由式，改用內建 constraint/objective name + params）
+
+> v1 強烈建議：
+> **不要允許任意 expression 直接形成 solver 限制**。
+> 求解約束統一走 `constraints[].name + params` 的可控枚舉，避免 LLM 生成出不可線性化的式子。
+
+---
+
+## 7. 內建函數（Functions）完整清單
+
+下面函數分三類：
+A) **資料查詢/分類（可用於 where 過濾）**
+B) **排班指派查詢（求解階段可編譯）**
+C) **日期/集合工具（where 或編譯輔助）
+
+### 7.1 A 類：資料查詢（Filter-only / 可安全 eval）
+
+| 函數                            | 參數            | 回傳     | 用途                   |
+| ----------------------------- | ------------- | ------ | -------------------- |
+| `dept(nurse)`                 | nurse         | string | 取得部門                 |
+| `job_level(nurse)`            | nurse         | string | 取得職級                 |
+| `has_skill(nurse, "VENT")`    | nurse, string | bool   | 技能判斷                 |
+| `in_group(nurse, "FULLTIME")` | nurse, string | bool   | 合約/群組（需 ctx mapping） |
+
+> `in_group` 若你尚未有 group 資料，可先不開放；但文件先定義。
+
+### 7.2 B 類：排班指派查詢（Solver-compilable）
+
+這些函數會被編譯成 `x[n,d,s]` 的線性形式（或輔助變數）。
+
+| 函數                                    | 回傳   | 可用位置   | 說明                           |
+| ------------------------------------- | ---- | ------ | ---------------------------- |
+| `assigned(nurse, day, "D")`           | bool | solver | 是否排該班（對應 x）                  |
+| `assigned_any(nurse, day)`            | bool | solver | 是否有排工作班（v1 建議不用，改用 work_var） |
+| `count_assigned(nurse, days, shifts)` | int  | solver | 計數（展開成 Σx）                   |
+| `count_work_days(nurse, days)`        | int  | solver | 工作日數（排除 OFF）                 |
+
+> 注意：v1 中你實際建模是「exactly one shift per day（含 OFF）」
+> 因此 `assigned_any` 可以用 `1 - x[OFF]` 表示。
+
+### 7.3 C 類：日期/集合工具（Filter / IR 展開）
+
+| 函數                           | 回傳               | 用途                          |
+| ---------------------------- | ---------------- | --------------------------- |
+| `date("YYYY-MM-DD")`         | date             | literal 化                   |
+| `days_between(from,to)`      | list<date>       | 生成日期列表（v1 可不開放給 DSL，交由 ctx） |
+| `is_weekend(day)`            | bool             | 週末判斷（需 calendar）            |
+| `dow(day)`                   | int              | 星期幾（1..7）                   |
+| `rolling_days(size, step=1)` | list<list<date>> | 產生滑動窗口（通常在 IR 生成時用）         |
+
+---
+
+## 8. DSL 可以做的「操作」能力（能力矩陣）
+
+### 8.1 硬性限制（HARD constraints）
+
+* 一人一天一班（含 OFF）
+* 每日 coverage（班別需求）
+* 最大連上天數
+* 最大連續特定班（夜班等）
+* 班別銜接禁止（transition）
+* 夜班後休息（rest_after_shift）
+* 任意窗口內最大班數/工作天
+* 不可排日期（請假/禁排）
+* 技能/資深 coverage
+* 週末完整休假頻率、完整週末原則、最低連休（若已擴充）
+
+> HARD 必須可編譯為線性限制，且違反即 infeasible。
+
+### 8.2 軟性目標（SOFT objectives）
+
+* 週末/夜班公平（range）
+* 偏好週末休
+* 避免 E→N
+* 避免單日 OFF（penalize single off）
+* 輪班多樣化（penalize consecutive same shift）
+
+> SOFT 以成本最小化方式加入 objective。
+
+### 8.3 偏好（PREFERENCE）
+
+* 等同 SOFT，但 scope 通常是 NURSE，且 layer=NURSE_PREF
+* 透過 bundle 可調整偏好影響力（weight_multiplier）
+
+---
+
+## 9. Constraint / Objective Name 枚舉（v1.0 建議完整集）
+
+> 這是「DSL 能表達的功能邊界」。新增規則型態 = 新增 name + params schema + compiler 分支。
+
+### 9.1 HARD constraints（name）
+
+* `one_shift_per_day`
+* `coverage_required`
+* `max_consecutive_work_days`
+* `max_consecutive_shift`
+* `forbid_transition`
+* `rest_after_shift`
+* `max_assignments_in_window`
+* `max_work_days_in_rolling_window`
+* `unavailable_dates`
+* `skill_coverage`
+* `if_novice_present_then_senior_present`
+* `max_consecutive_same_shift`
+* `min_consecutive_off_days`
+* `weekend_all_or_nothing`
+* `min_full_weekends_off_in_window`
+
+### 9.2 SOFT/PREFERENCE objectives（name）
+
+* `balance_shift_count`（range）
+* `balance_weekend_shift_count`（range）
+* `penalize_transition`
+* `prefer_off_on_weekends`
+* `prefer_shift`
+* `penalize_single_off_day`
+* `penalize_consecutive_same_shift`
+
+---
+
+## 10. Params 規範（通用約束）
+
+### 10.1 params 基本規則
+
+* 必須是 object
+* 不允許未知欄位（schema `additionalProperties=false`）
+* 字串 enum 欄位必須符合定義
+* shifts/dates list 需存在於 master data
+
+### 10.2 常見 params 型別
+
+* `shift_codes: list<string>`
+* `dates: list<YYYY-MM-DD>`
+* `window_days: int`
+* `max_days / min_days: int`
+* `required: int`
+* `department_id: string`
+* `by_job_levels: list<string>`
+
+---
+
+## 11. `where:` 的規範（v1 推薦做法）
+
+### 11.1 使用定位
+
+* `where` **只用於「展開 targets 過濾」**，不進 solver
+* 支援的 pattern（v1 最穩）：
+
+  * `dept(nurse) == "ICU"`
+  * `job_level(nurse) in {"N3","N4"}`
+  * `has_skill(nurse,"VENT")`
+
+### 11.2 不建議（v1 禁止）
+
+* 在 where 中呼叫會依賴解的函數：`assigned(...)`、`count_assigned(...)`
+* 在 where 中做複雜數學（會讓可預測性下降）
+
+---
+
+## 12. `for_each:` 的規範（v1 可選）
+
+### 12.1 v1 立場
+
+* 大多數規則不需要 `for_each`，由 compiler 直接對 nurses/days 展開即可
+* 若保留 `for_each`，建議只支援：
+
+  * `nurses` / `days` / `shifts`
+  * `rolling_days(size, step)`
+
+### 12.2 目的
+
+* 給未來 v1.2 做「更通用 rule」鋪路，但 v1 不強依賴。
+
+---
+
+## 13. 可編譯（Compiler）規範：DSL → IR → CP-SAT
+
+### 13.1 編譯管線
+
+1. YAML parse
+2. JSON Schema validate（結構 + params）
+3. Semantic validate（shift code / nurse id / dept id 存在）
+4. Bundle-level validate（precheck + heuristics）
+5. DSL → IR（targets 展開、where 過濾、freeze）
+6. IR → CP-SAT（constraints / objectives）
+7. Solve + Extract
+
+### 13.2 決策變數標準
+
+* `x[n,d,s] ∈ {0,1}`
+* exactly-one：`Σ_s x[n,d,s] == 1`（含 OFF）
+
+### 13.3 Objective 整數化規範
+
+* `effective_cost = round(weight * penalty * COST_SCALE)`
+* `COST_SCALE` 建議 100
+
+---
+
+## 14. 反向翻譯（DSL → NL）輸出規範（你系統必備）
+
+### 14.1 每條 constraint/objective 必須翻譯成一段
+
+包含：
+
+* scope（GLOBAL/HOSPITAL/DEPARTMENT/NURSE）
+* 類型（硬性/軟性/偏好）
+* name 對應的自然語意
+* params 展開（數字/班別/窗口）
+
+### 14.2 where 的翻譯
+
+* `where` 必須翻成「僅對…的人生效」
+
+---
+
+## 15. 版本與相容性規範
+
+### 15.1 DSL 版本欄位
+
+* `dsl_version: "1.0"` 必填
+
+### 15.2 向下相容
+
+* 同 major（1.x）必須向下相容
+* 不可移除既有 `name`，只能標記 deprecated
+* 新增 `name` 需同時新增：
+
+  * schema params
+  * compiler 分支
+  * reverse translator 支援
+
+---
+
+## 16. 最佳實務（LLM 產 DSL 的約束）
+
+### 16.1 生成規則
+
+* LLM 只能從枚舉的 `name` 中選擇
+* params 必須完全符合 schema
+* where 僅使用允許 pattern
+* 一條規則只做一件事（避免混雜）
+
+### 16.2 建議的 DSL 風格
+
+* HARD 規則拆細（每條只描述一種硬限制）
+* SOFT/PREFERENCE 用 objectives 拆出多條，便於權重調整
+
+---
+
+## 17. 附錄：Expression 範例（合規 vs 不合規）
+
+### 17.1 合規 where 範例
+
+```yaml
+where: dept(nurse) == "ICU"
+where: job_level(nurse) in {"N3","N4"}
+where: has_skill(nurse,"VENT")
+```
+
+### 17.2 不合規 where 範例（v1 禁止）
+
+```yaml
+where: assigned(nurse, day, "N")            # 依賴解
+where: count_assigned(nurse, window, {"N"}) > 2  # 依賴解
+where: shift_of(nurse, day) == "N"          # 依賴解且不可編譯
 ```
