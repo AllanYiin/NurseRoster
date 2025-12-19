@@ -3,8 +3,7 @@ import { api } from "./api.js";
 import { toast } from "./toast.js";
 import { state } from "./state.js";
 import { wireModal } from "./modal.js";
-import { projectMonthRange } from "./project.js";
-import { isoDate } from "./date.js";
+import { openProjectCreator, setCurrentProject } from "./project.js";
 import { setView } from "./router.js";
 import { loadCalendar } from "./views/calendar.js";
 import {
@@ -90,17 +89,19 @@ export async function boot() {
   $("#btnDslLabNlToDsl").addEventListener("click", nlToDslLab);
   $("#btnDslLabDslToNl").addEventListener("click", () => runDslLabReverse().catch((e) => toast(`反向翻譯失敗：${e.message}`, "bad")));
   $("#btnDslLabValidate").addEventListener("click", () => runDslLabValidate().catch((e) => toast(`驗證失敗：${e.message}`, "bad")));
+  $("#btnCreateProject").addEventListener("click", () =>
+    openProjectCreator({
+      onCreated: async () => {
+        await loadCalendar().catch((e) => toast(`載入失敗：${e.message}`, "bad"));
+      },
+    })
+  );
 
   try {
-    state.project = await api("/api/projects/current");
-    $("#projectPill").textContent = `專案：${state.project.name}（${state.project.month}）`;
-    const pm = projectMonthRange();
-    if (pm) {
-      $("#conflictStart").value = isoDate(pm[0]);
-      $("#conflictEnd").value = isoDate(pm[1]);
-    }
+    const project = await api("/api/projects/current");
+    setCurrentProject(project);
   } catch (e) {
-    $("#projectPill").textContent = "尚無專案資料";
+    setCurrentProject(null);
     toast("目前沒有專案資料，請先建立專案。", "warn");
   }
 
