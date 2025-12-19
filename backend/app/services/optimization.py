@@ -201,9 +201,13 @@ def _parse_enabled_rules(
     conf["conflicts"] = conflicts
 
     for c in merged_constraints:
-        if c.name == "daily_coverage":
+        if c.name in {"daily_coverage", "coverage_required"}:
             shift = (c.shift_code or "").strip()
-            mn = int(c.params.get("min") or 0)
+            mn = int(c.params.get("min") or c.params.get("required") or 0)
+            if not shift:
+                shift_codes = c.params.get("shift_codes") or []
+                if isinstance(shift_codes, list) and shift_codes:
+                    shift = str(shift_codes[0]).strip()
             if shift and mn > 0:
                 conf["coverage"][shift] = max(conf["coverage"].get(shift, 0), mn)
         elif c.name == "max_consecutive":
@@ -212,6 +216,22 @@ def _parse_enabled_rules(
             if shift and mx > 0:
                 current = conf["max_consecutive"].get(shift, mx)
                 conf["max_consecutive"][shift] = min(current, mx)
+        elif c.name == "max_consecutive_work_days":
+            try:
+                max_days = int(c.params.get("max_days") or 0)
+            except Exception:
+                continue
+            if max_days <= 0:
+                continue
+            include_shifts = c.params.get("include_shifts") or []
+            conf["max_work_days_in_window"].append(
+                {
+                    "window_days": max_days + 1,
+                    "max_work_days": max_days,
+                    "include_shifts": include_shifts if isinstance(include_shifts, list) else [],
+                    "sliding": True,
+                }
+            )
         elif c.name == "prefer_off_after_night":
             w = int(c.weight or c.params.get("weight") or 1)
             conf["prefer_off_after_night"] = max(conf["prefer_off_after_night"], w)

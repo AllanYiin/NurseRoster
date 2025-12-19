@@ -11,6 +11,7 @@ from sqlmodel import Session, select, delete
 from app.api.deps import db_session
 from app.models.entities import Assignment, Project, ProjectSnapshot, Rule, RuleVersion, SchedulePeriod
 from app.schemas.common import ok
+from app.services.law_rules import ensure_law_rules
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -71,6 +72,7 @@ def create_project(payload: ProjectCreate, session: Session = Depends(db_session
     session.add(proj)
     session.commit()
     session.refresh(proj)
+    ensure_law_rules(session, proj.id)
     return ok(proj.model_dump())
 
 
@@ -83,6 +85,7 @@ def get_current(session: Session = Depends(db_session)):
         session.add(proj)
         session.commit()
         session.refresh(proj)
+        ensure_law_rules(session, proj.id)
     return ok({"id": proj.id, "name": proj.name, "month": proj.month})
 
 
