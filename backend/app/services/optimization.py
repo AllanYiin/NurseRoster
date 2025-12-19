@@ -23,6 +23,7 @@ from app.models.entities import (
 )
 from app.schemas.common import err
 from app.services.rules import resolve_project_rules
+from app.services.rule_bundles import resolve_rule_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,7 @@ def enqueue_job(session: Session, payload: dict) -> OptimizationJob:
             if isinstance(payload.get("solver"), dict)
             else payload.get("solver_threads")
         ),
+        rule_bundle_id=payload.get("rule_bundle_id"),
         parameters=payload.get("parameters") or {},
         request_json=payload,
         status=JobStatus.QUEUED,
@@ -162,7 +164,7 @@ def apply_job_result(job_id: int) -> OptimizationJob | None:
         return job
 
 
-def _parse_enabled_rules(session: Session, project_id: int, nurses: List[Nurse]) -> dict:
+def _parse_enabled_rules(session: Session, project_id: int, nurses: List[Nurse], rule_bundle_id: int | None) -> dict:
     conf = {
         "coverage": {},
         "max_consecutive": {},
@@ -185,7 +187,12 @@ def _parse_enabled_rules(session: Session, project_id: int, nurses: List[Nurse])
 
     nurse_id_to_staff = {n.id: n.staff_no for n in nurses if n.id is not None}
 
-    merged_constraints, conflicts = resolve_project_rules(session, project_id)
+    merged_constraints = []
+    conflicts = []
+    if rule_bundle_id:
+        merged_constraints, conflicts = resolve_rule_bundle(session, rule_bundle_id)
+    else:
+        merged_constraints, conflicts = resolve_project_rules(session, project_id)
     conf["conflicts"] = conflicts
 
     for c in merged_constraints:
@@ -829,7 +836,7 @@ def stream_job_run(job_id: int) -> Generator[str, None, None]:
             project = s.get(Project, job.project_id) if job.project_id else None
             nurses = s.exec(select(Nurse).where(Nurse.is_active == True).order_by(Nurse.staff_no)).all()  # noqa: E712
             shift_rows = s.exec(select(ShiftCode).where(ShiftCode.is_active == True).order_by(ShiftCode.code)).all()  # noqa: E712
-            rules_conf = _parse_enabled_rules(s, job.project_id or 0, nurses)
+            rules_conf = _parse_enabled_rules(s, job.project_id or 0, nurses, job.rule_bundle_id)
 
         if not project:
             yield from _fail_job(job_id, "VALIDATION", "找不到對應的計畫/專案")

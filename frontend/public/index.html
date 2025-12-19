@@ -24,6 +24,9 @@
         <button class="nav__item" data-view="rules">
           <span class="nav__label">規則維護</span>
         </button>
+        <button class="nav__item" data-view="bundles">
+          <span class="nav__label">規則集精靈</span>
+        </button>
         <button class="nav__item" data-view="master">
           <span class="nav__label">資料維護</span>
         </button>
@@ -179,6 +182,114 @@
                 <tbody></tbody>
               </table>
             </div>
+          </div>
+        </div>
+
+        <!-- Rule Bundles Wizard -->
+        <div class="view is-hidden" id="view-bundles">
+          <div class="wizard">
+            <aside class="wizard__steps">
+              <div class="wizard__steps-title">步驟</div>
+              <button class="wizard__step is-active" data-step="1">1．選擇排班期與科別</button>
+              <button class="wizard__step" data-step="2">2．載入法規硬規則（LAW）</button>
+              <button class="wizard__step" data-step="3">3．載入醫院硬規則（HOSPITAL）</button>
+              <button class="wizard__step" data-step="4">4．選擇/編輯公版規則（TEMPLATE）</button>
+              <button class="wizard__step" data-step="5">5．載入上一期個人偏好（NURSE_PREF）</button>
+              <button class="wizard__step" data-step="6">6．預覽與驗證 → 生成 Bundle</button>
+            </aside>
+            <section class="wizard__content">
+              <div class="wizard__panel is-active" data-step="1">
+                <div class="wizard__panel-title">Step 1：選擇排班期與科別</div>
+                <div class="muted">建立/載入本期 Schedule Period，並指定本期適用的規則集。</div>
+                <div class="form-grid">
+                  <label class="field">
+                    <span>科別</span>
+                    <select id="wizardDepartment"></select>
+                  </label>
+                  <label class="field">
+                    <span>院區 ID（可選）</span>
+                    <input type="number" id="wizardHospitalId" placeholder="例如：1" />
+                  </label>
+                  <label class="field">
+                    <span>排班起日</span>
+                    <input type="date" id="wizardStartDate" />
+                  </label>
+                  <label class="field">
+                    <span>排班迄日</span>
+                    <input type="date" id="wizardEndDate" />
+                  </label>
+                  <label class="field full">
+                    <span>排班期名稱</span>
+                    <input type="text" id="wizardPeriodName" placeholder="例如：ICU 2026-01 排班期" />
+                  </label>
+                </div>
+                <div class="row">
+                  <button class="btn btn--primary" id="wizardCreatePeriod">建立/載入排班期</button>
+                  <div class="muted" id="wizardPeriodStatus">尚未建立排班期</div>
+                </div>
+              </div>
+              <div class="wizard__panel" data-step="2">
+                <div class="wizard__panel-title">Step 2：載入法規硬規則（LAW）</div>
+                <div class="muted">GLOBAL + HARD + 啟用規則，預設全選。</div>
+                <div class="wizard__list" id="wizardLawRules"></div>
+              </div>
+              <div class="wizard__panel" data-step="3">
+                <div class="wizard__panel-title">Step 3：載入醫院硬規則（HOSPITAL）</div>
+                <div class="muted">HOSPITAL + HARD + 啟用規則，預設全選。</div>
+                <div class="wizard__list" id="wizardHospitalRules"></div>
+              </div>
+              <div class="wizard__panel" data-step="4">
+                <div class="wizard__panel-title">Step 4：選擇/編輯公版規則（TEMPLATE）</div>
+                <div class="row" style="flex-wrap: wrap;">
+                  <label class="field">
+                    <span>公版</span>
+                    <select id="wizardTemplateSelect"></select>
+                  </label>
+                  <button class="btn" id="wizardTemplateReload">重新載入</button>
+                  <button class="btn btn--primary" id="wizardTemplateCreate">新增公版</button>
+                  <button class="btn" id="wizardTemplateEdit">編輯公版</button>
+                  <button class="btn" id="wizardTemplateDelete">刪除公版</button>
+                </div>
+                <div class="muted">勾選要納入的規則（TEMPLATE 層）。</div>
+                <div class="wizard__list" id="wizardTemplateRules"></div>
+                <div class="row">
+                  <button class="btn btn--primary" id="wizardTemplateSaveRules">儲存公版規則</button>
+                  <div class="muted" id="wizardTemplateStatus">尚未載入公版</div>
+                </div>
+              </div>
+              <div class="wizard__panel" data-step="5">
+                <div class="wizard__panel-title">Step 5：載入上一期個人偏好（NURSE_PREF）</div>
+                <div class="row" style="flex-wrap: wrap;">
+                  <label class="field">
+                    <span>偏好來源期別</span>
+                    <select id="wizardNursePrefPeriod"></select>
+                  </label>
+                  <label class="field">
+                    <span>載入模式</span>
+                    <select id="wizardNursePrefMode">
+                      <option value="CLONE_AS_IS" selected>CLONE_AS_IS</option>
+                      <option value="CLONE_LATEST_VERSION">CLONE_LATEST_VERSION</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="muted" id="wizardNursePrefStatus">尚未載入上一期</div>
+              </div>
+              <div class="wizard__panel" data-step="6">
+                <div class="wizard__panel-title">Step 6：預覽與驗證</div>
+                <div class="muted">生成後會固定版本（rule_version_id + hash），供本期最佳化與衝突解釋使用。</div>
+                <div class="row">
+                  <button class="btn" id="wizardValidateBundle">僅驗證</button>
+                  <button class="btn btn--primary" id="wizardGenerateBundle">生成並套用</button>
+                  <div class="pill" id="wizardValidationBadge">尚未驗證</div>
+                </div>
+                <div class="wizard__summary" id="wizardBundleSummary"></div>
+                <div class="wizard__list" id="wizardBundlePreview"></div>
+              </div>
+              <div class="wizard__footer">
+                <button class="btn" id="wizardPrev">上一步</button>
+                <button class="btn btn--primary" id="wizardNext">下一步</button>
+              </div>
+            </section>
           </div>
         </div>
 

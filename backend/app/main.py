@@ -18,6 +18,9 @@ from app.api.schedule import router as schedule_router
 from app.api.optimization import router as opt_router
 from app.api.projects import router as projects_router
 from app.api.dsl import router as dsl_router
+from app.api.schedule_periods import router as schedule_periods_router
+from app.api.rule_bundles import router as rule_bundles_router
+from app.api.templates import router as templates_router
 
 logger = logging.getLogger(__name__)
 FRONTEND_PUBLIC_DIR = PROJECT_ROOT / "frontend" / "public"
@@ -56,6 +59,9 @@ def create_app() -> FastAPI:
     app.include_router(rules_router)
     app.include_router(opt_router)
     app.include_router(dsl_router)
+    app.include_router(schedule_periods_router)
+    app.include_router(rule_bundles_router)
+    app.include_router(templates_router)
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):

@@ -760,7 +760,11 @@ def _dict_to_constraint(data: dict) -> RuleConstraint:
 
 
 def load_rule_constraints(rule: Rule, session: Session | None = None) -> tuple[list[RuleConstraint], dict]:
-    validation = validate_dsl(rule.dsl_text or "{}", session=session, rule=rule)
+    return load_rule_constraints_from_dsl(rule.dsl_text or "{}", rule, session=session)
+
+
+def load_rule_constraints_from_dsl(dsl_text: str, rule: Rule | None, session: Session | None = None) -> tuple[list[RuleConstraint], dict]:
+    validation = validate_dsl(dsl_text or "{}", session=session, rule=rule)
     constraints = [_dict_to_constraint(d) for d in validation.get("normalized_constraints", [])]
     return constraints, validation
 
