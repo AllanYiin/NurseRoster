@@ -181,26 +181,28 @@ def _validate_where_expression(expr: object, path: str, issues: list[str], warni
 
     lowered = expr_text.lower()
     for fn in FORBIDDEN_WHERE_FUNCTIONS:
-        if re.search(rf\"\\b{re.escape(fn)}\\s*\\(\", lowered):
-            issues.append(f\"{path} 不允許使用 {fn}（依賴解或不可編譯）。\")
-    for match in re.finditer(r\"\\b([A-Za-z_][A-Za-z0-9_]*)\\s*\\(\", expr_text):
+        if re.search(rf"\b{re.escape(fn)}\s*\(", lowered):
+            issues.append(f"{path} 不允許使用 {fn}（依賴解或不可編譯）。")
+    for match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", expr_text):
         fn_name = match.group(1)
         if fn_name.lower() not in ALLOWED_WHERE_FUNCTIONS:
-            warnings.append(f\"{path} 出現未知函數：{fn_name}，請確認是否為可用函數。\")
+            warnings.append(f"{path} 出現未知函數：{fn_name}，請確認是否為可用函數。")
 
 
 def _validate_for_each(value: object, path: str, issues: list[str]) -> None:
     if value is None:
         return
     if not isinstance(value, str):
-        issues.append(f\"{path} 必須為字串（iterator）。\")
+        issues.append(f"{path} 必須為字串（iterator）。")
         return
     lowered = value.strip().lower()
     if lowered in SUPPORTED_FOR_EACH:
         return
-    if lowered.startswith(\"rolling_days(\") and lowered.endswith(\")\"):
+    if lowered.startswith("rolling_days(") and lowered.endswith(")"):
         return
-    issues.append(f\"{path} 未支援的 iterator：{value}。請使用 nurses/days/shifts/rolling_days(...)\")
+    issues.append(f"{path} 未支援的 iterator：{value}。請使用 nurses/days/shifts/rolling_days(...)")
+
+
 def _extract_constraints_from_obj(
     obj: dict,
     *,
