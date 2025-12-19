@@ -5,7 +5,7 @@ import { state } from "./state.js";
 import { wireModal } from "./modal.js";
 import { openProjectCreator, setCurrentProject } from "./project.js";
 import { setView } from "./router.js";
-import { loadCalendar } from "./views/calendar.js";
+import { loadCalendar, openTestScheduleImporter } from "./views/calendar.js";
 import {
   runNlToDslStream,
   runValidateDsl,
@@ -31,6 +31,7 @@ export async function boot() {
   $("#btnRefresh").addEventListener("click", () => setView(state.currentView));
 
   $("#btnLoadCalendar").addEventListener("click", () => loadCalendar().catch((e) => toast(`載入失敗：${e.message}`, "bad")));
+  $("#btnImportTestSchedule").addEventListener("click", () => openTestScheduleImporter());
   $("#calRange")?.addEventListener("change", () => loadCalendar().catch((e) => toast(`載入失敗：${e.message}`, "bad")));
   $("#calStart")?.addEventListener("change", () => {
     $("#calStart").dataset.manual = "1";

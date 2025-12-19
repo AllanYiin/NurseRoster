@@ -2,19 +2,21 @@ from __future__ import annotations
 
 from calendar import monthrange
 from datetime import date as dt_date, datetime, timedelta
+import logging
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from app.api.deps import db_session
-from app.models.entities import Assignment, Project, Rule, SchedulePeriod
+from app.models.entities import Assignment, Nurse, Project, Rule, SchedulePeriod, ShiftCode
 from app.schemas.common import ok
 from app.services.rules import resolve_project_rules
 from app.services.rule_bundles import resolve_rule_bundle
 
 router = APIRouter(prefix="/api/schedule", tags=["schedule"])
+logger = logging.getLogger(__name__)
 
 
 class AssignmentPayload(BaseModel):
@@ -50,6 +52,14 @@ def _project_date_range(session: Session, project: Project, start: Optional[dt_d
     except Exception:
         today = dt_date.today()
         return start or today, end or today
+
+
+def _last_full_month_range(today: dt_date | None = None) -> tuple[dt_date, dt_date]:
+    today = today or dt_date.today()
+    first_this_month = dt_date(today.year, today.month, 1)
+    last_prev_month = first_this_month - timedelta(days=1)
+    start_prev_month = dt_date(last_prev_month.year, last_prev_month.month, 1)
+    return start_prev_month, last_prev_month
 def _collect_assignments(session: Session, project_id: int, start: dt_date, end: dt_date) -> List[Assignment]:
     return session.exec(
         select(Assignment).where(Assignment.project_id == project_id, Assignment.day >= start, Assignment.day <= end)
@@ -207,3 +217,60 @@ def list_conflicts(project_id: int, start: Optional[dt_date] = None, end: Option
                             )
 
     return ok([c.model_dump() for c in conflicts])
+
+
+@router.post("/import-test-data")
+def import_test_data(project_id: int, session: Session = Depends(db_session)):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="找不到專案")
+
+    nurses = session.exec(select(Nurse).order_by(Nurse.staff_no)).all()
+    if not nurses:
+        raise HTTPException(status_code=400, detail="沒有護理師資料")
+
+    shift_rows = session.exec(select(ShiftCode).where(ShiftCode.is_active == True).order_by(ShiftCode.code)).all()  # noqa: E712
+    shift_pool = [x.code for x in shift_rows if x.code] or ["D", "E", "N", "OFF"]
+    if "OFF" not in shift_pool:
+        shift_pool.append("OFF")
+
+    cycle = [code for code in ["D", "E", "N", "OFF", "OFF"] if code in shift_pool]
+    if len(cycle) < 2:
+        cycle = shift_pool
+
+    start_date, end_date = _last_full_month_range()
+    logger.info("匯入測試班表資料: project_id=%s range=%s~%s", project_id, start_date, end_date)
+
+    session.exec(
+        delete(Assignment).where(
+            Assignment.project_id == project_id,
+            Assignment.day >= start_date,
+            Assignment.day <= end_date,
+        )
+    )
+
+    total = 0
+    cur = start_date
+    while cur <= end_date:
+        for idx, nurse in enumerate(nurses):
+            shift_code = cycle[(idx + (cur - start_date).days) % len(cycle)]
+            session.add(
+                Assignment(
+                    project_id=project_id,
+                    day=cur,
+                    nurse_staff_no=nurse.staff_no,
+                    shift_code=shift_code,
+                )
+            )
+            total += 1
+        cur += timedelta(days=1)
+
+    session.commit()
+    return ok(
+        {
+            "project_id": project_id,
+            "start": start_date,
+            "end": end_date,
+            "rows": total,
+        }
+    )
