@@ -41,6 +41,22 @@ def _seed_period_and_project(session):
 
 
 def _create_rule(session, project_id: int, *, scope_type: RuleScopeType, scope_id: int | None, rule_type: RuleType, title: str):
+    if rule_type == RuleType.HARD:
+        body_lines = [
+            "constraints:",
+            "  - id: \"C1\"",
+            "    name: coverage_required",
+            "    params:",
+            "      shift_codes: [\"D\"]",
+            "      required: 2",
+        ]
+    else:
+        body_lines = [
+            "objectives:",
+            "  - id: \"O1\"",
+            "    name: prefer_off_on_weekends",
+            "    weight: 5",
+        ]
     rule = Rule(
         project_id=project_id,
         title=title,
@@ -48,7 +64,20 @@ def _create_rule(session, project_id: int, *, scope_type: RuleScopeType, scope_i
         scope_id=scope_id,
         rule_type=rule_type,
         priority=1,
-        dsl_text='{"dsl_version":"sr-dsl/1.0","constraints":[{"name":"daily_coverage","shift":"D","min":2}]}',
+        dsl_text="\n".join(
+            [
+                "dsl_version: \"1.0\"",
+                "id: \"R_GLOBAL_001\"",
+                "name: \"規則\"",
+                f"scope:",
+                f"  type: {scope_type.value}",
+                f"  id: {scope_id if scope_id is not None else 'null'}",
+                f"type: {rule_type.value}",
+                "priority: 1",
+                "enabled: true",
+                *body_lines,
+            ]
+        ),
         is_enabled=True,
     )
     session.add(rule)
