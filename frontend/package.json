@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "npx serve public -l ${FRONTEND_PORT:-5173}",
-    "preview": "npx serve public -l ${FRONTEND_PORT:-5173}",
+    "dev": "npx serve public -l ${FRONTEND_PORT:-4173}",
+    "preview": "npx serve public -l ${FRONTEND_PORT:-4173}",
     "build": "echo \"Static frontend served from public; no build step.\""
   }
 }
