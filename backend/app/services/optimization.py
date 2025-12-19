@@ -164,7 +164,12 @@ def apply_job_result(job_id: int) -> OptimizationJob | None:
         return job
 
 
-def _parse_enabled_rules(session: Session, project_id: int, nurses: List[Nurse], rule_bundle_id: int | None) -> dict:
+def _parse_enabled_rules(
+    session: Session,
+    project_id: int,
+    nurses: List[Nurse],
+    rule_bundle_id: int | None = None,
+) -> dict:
     conf = {
         "coverage": {},
         "max_consecutive": {},
