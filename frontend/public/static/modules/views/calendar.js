@@ -104,6 +104,44 @@ export async function loadCalendar() {
   });
 }
 
+function lastFullMonthRange() {
+  const now = new Date();
+  const firstThis = new Date(now.getFullYear(), now.getMonth(), 1);
+  const lastPrev = new Date(firstThis.getTime() - 24 * 60 * 60 * 1000);
+  const startPrev = new Date(lastPrev.getFullYear(), lastPrev.getMonth(), 1);
+  return [startPrev, lastPrev];
+}
+
+export function openTestScheduleImporter() {
+  if (!state.project?.id) {
+    toast("請先建立專案", "warn");
+    return;
+  }
+  const [startPrev, endPrev] = lastFullMonthRange();
+  const startLabel = isoDate(startPrev);
+  const endLabel = isoDate(endPrev);
+  openModal({
+    title: "匯入測試班表",
+    bodyHtml: `
+      <div class="muted">
+        將匯入 ${esc(startLabel)}～${esc(endLabel)} 的測試班表到「${esc(state.project.name)}」。
+      </div>
+    `,
+    onOk: async () => {
+      await api(`/api/schedule/import-test-data?project_id=${state.project.id}`, { method: "POST" });
+      const startEl = $("#calStart");
+      const rangeEl = $("#calRange");
+      if (startEl) {
+        startEl.value = startLabel;
+        startEl.dataset.manual = "1";
+      }
+      if (rangeEl) rangeEl.value = "month";
+      toast("已匯入測試班表", "good");
+      await loadCalendar();
+    },
+  });
+}
+
 function openAssignmentEditor(staffNo, day, shifts) {
   const opts = shifts
     .filter((s) => s.is_active)
