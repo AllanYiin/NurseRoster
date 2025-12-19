@@ -83,6 +83,12 @@ const state = {
   masterKind: "nurses",
   ruleChat: [],
   ruleChatScratch: "",
+  ruleFilters: {
+    scope_type: "",
+    scope_id: "",
+    type: "",
+    q: "",
+  },
   modal: {
     onOk: null,
   },
@@ -173,6 +179,7 @@ function streamNlToDsl(text, handlers = {}) {
 function openModal({ title, bodyHtml, onOk }) {
   $("#modalTitle").textContent = title || "";
   $("#modalBody").innerHTML = bodyHtml || "";
+  $("#modalOk").textContent = "確定";
   state.modal.onOk = onOk || null;
   $("#modal").classList.remove("is-hidden");
 }
@@ -322,8 +329,33 @@ function openAssignmentEditor(staffNo, day, shifts) {
 }
 
 // ===== Rules =====
+function buildRuleQuery() {
+  const params = new URLSearchParams();
+  params.set("project_id", state.project.id);
+  if (state.ruleFilters.scope_type) params.set("scope_type", state.ruleFilters.scope_type);
+  if (state.ruleFilters.scope_id) params.set("scope_id", state.ruleFilters.scope_id);
+  if (state.ruleFilters.type) params.set("type", state.ruleFilters.type);
+  if (state.ruleFilters.q) params.set("q", state.ruleFilters.q);
+  return params.toString();
+}
+
+function syncRuleFiltersFromUI() {
+  state.ruleFilters.scope_type = $("#ruleFilterScopeType")?.value || "";
+  state.ruleFilters.scope_id = $("#ruleFilterScopeId")?.value.trim() || "";
+  state.ruleFilters.type = $("#ruleFilterType")?.value || "";
+  state.ruleFilters.q = $("#ruleFilterQ")?.value.trim() || "";
+}
+
+function resetRuleFilters() {
+  state.ruleFilters = { scope_type: "", scope_id: "", type: "", q: "" };
+  if ($("#ruleFilterScopeType")) $("#ruleFilterScopeType").value = "";
+  if ($("#ruleFilterScopeId")) $("#ruleFilterScopeId").value = "";
+  if ($("#ruleFilterType")) $("#ruleFilterType").value = "";
+  if ($("#ruleFilterQ")) $("#ruleFilterQ").value = "";
+}
+
 async function loadRules() {
-  const rows = await api(`/api/rules?project_id=${state.project.id}`);
+  const rows = await api(`/api/rules?${buildRuleQuery()}`);
   const tbody = $("#rulesTable tbody");
   tbody.innerHTML = rows
     .map((r) => {
@@ -334,7 +366,11 @@ async function loadRules() {
           <td>${esc(r.title)}</td>
           <td><input type="checkbox" class="ruleEnabled" ${checked}></td>
           <td class="muted">${esc(dt)}</td>
-          <td><button class="btn btn--sm" data-act="edit">編輯</button> <button class="btn btn--sm" data-act="del">刪除</button></td>
+          <td>
+            <button class="btn btn--sm" data-act="edit">編輯</button>
+            <button class="btn btn--sm" data-act="versions">版本</button>
+            <button class="btn btn--sm" data-act="del">刪除</button>
+          </td>
         </tr>
       `;
     })
@@ -371,6 +407,7 @@ async function loadRules() {
       const r = rows.find((x) => String(x.id) === String(id));
       if (!r) return;
       if (act === "edit") return openRuleEditor(r);
+      if (act === "versions") return openRuleVersions(r);
       if (act === "del") {
         if (!confirm("確定要刪除這條規則？")) return;
         await api(`/api/rules/${id}`, { method: "DELETE" });
@@ -430,6 +467,303 @@ function runNlToDslStream() {
       toast(`轉譯失敗：${err.message}`, "bad");
     },
   });
+}
+
+async function streamRuleVersionFromNl(ruleId, text, handlers = {}) {
+  const { onDraft, onStatus, onToken, onCompleted, onValidated, onError, signal } = handlers;
+  const res = await fetch(`/api/rules/${ruleId}/versions:from_nl`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+    signal,
+  });
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const emit = (eventName, rawData) => {
+    let data = rawData;
+    try {
+      data = JSON.parse(rawData);
+    } catch {
+      // keep raw
+    }
+    if (eventName === "draft") onDraft && onDraft(data);
+    if (eventName === "status") onStatus && onStatus(data);
+    if (eventName === "token") onToken && onToken(data);
+    if (eventName === "completed") onCompleted && onCompleted(data);
+    if (eventName === "validated") onValidated && onValidated(data);
+    if (eventName === "error") onError && onError(data);
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() || "";
+    for (const part of parts) {
+      if (!part.trim()) continue;
+      let eventName = "message";
+      const dataLines = [];
+      part.split("\n").forEach((line) => {
+        if (line.startsWith("event:")) {
+          eventName = line.replace("event:", "").trim();
+        } else if (line.startsWith("data:")) {
+          dataLines.push(line.replace("data:", "").trim());
+        }
+      });
+      const payload = dataLines.join("\n");
+      if (eventName && payload) emit(eventName, payload);
+    }
+  }
+}
+
+function formatValidationStatus(status) {
+  if (status === "PASS") return "PASS";
+  if (status === "WARN") return "WARN";
+  if (status === "FAIL") return "FAIL";
+  if (status === "PENDING") return "PENDING";
+  return status || "";
+}
+
+function renderValidationReport(report) {
+  if (!report) return "<div class=\"muted\">尚無驗證資訊</div>";
+  const issues = (report.issues || []).map((x) => `<li>${esc(x)}</li>`).join("");
+  const warnings = (report.warnings || []).map((x) => `<li>${esc(x)}</li>`).join("");
+  return `
+    ${issues ? `<div class="strong">錯誤</div><ul>${issues}</ul>` : `<div class="muted">沒有錯誤</div>`}
+    ${warnings ? `<div class="strong" style="margin-top:8px;">警告</div><ul>${warnings}</ul>` : ""}
+  `;
+}
+
+function openRuleVersionCompare(rule, version) {
+  openModal({
+    title: `版本比對：V${version.version}`,
+    bodyHtml: `
+      <div class="grid2">
+        <div class="subcard">
+          <div class="subcard__title">目前規則</div>
+          <div class="muted">標題：${esc(rule.title)}</div>
+          <div class="strong" style="margin-top:8px;">自然語言</div>
+          <pre style="white-space:pre-wrap;margin:6px 0 0;">${esc(rule.nl_text || "")}</pre>
+          <div class="strong" style="margin-top:8px;">DSL</div>
+          <pre style="white-space:pre-wrap;margin:6px 0 0;">${esc(rule.dsl_text || "")}</pre>
+        </div>
+        <div class="subcard">
+          <div class="subcard__title">版本 V${esc(version.version)}（${esc(formatValidationStatus(version.validation_status))}）</div>
+          <div class="muted">建立：${esc((version.created_at || "").toString().replace("T", " ").slice(0, 19))}</div>
+          <div class="strong" style="margin-top:8px;">自然語言</div>
+          <pre style="white-space:pre-wrap;margin:6px 0 0;">${esc(version.nl_text || "")}</pre>
+          <div class="strong" style="margin-top:8px;">DSL</div>
+          <pre style="white-space:pre-wrap;margin:6px 0 0;">${esc(version.dsl_text || "")}</pre>
+        </div>
+      </div>
+    `,
+    onOk: async () => {},
+  });
+  $("#modalOk").textContent = "關閉";
+}
+
+function openRuleVersions(rule) {
+  openModal({
+    title: `規則版本管理：${rule.title}`,
+    bodyHtml: `
+      <div class="grid2">
+        <div class="subcard">
+          <div class="subcard__title">版本列表</div>
+          <div class="muted" style="margin-bottom:8px;">選擇版本可預覽、比對或採用。</div>
+          <div id="ruleVersionList"></div>
+          <div class="row" style="margin-top:10px;">
+            <button class="btn" id="btnReloadVersions">重新整理版本</button>
+          </div>
+        </div>
+        <div class="subcard">
+          <div class="subcard__title">版本內容</div>
+          <div id="ruleVersionDetail" class="muted">尚未選擇版本</div>
+        </div>
+      </div>
+      <div class="subcard" style="margin-top:12px;">
+        <div class="subcard__title">自然語言 → 新版本（含草稿狀態）</div>
+        <label class="field full">
+          <span>規則描述</span>
+          <textarea id="ruleVersionNl" rows="4" placeholder="輸入自然語言描述，系統會建立草稿版本並驗證。"></textarea>
+        </label>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn btn--primary" id="btnRuleVersionStream">開始轉譯</button>
+          <button class="btn" id="btnRuleVersionClear">清除</button>
+        </div>
+        <label class="field full" style="margin-top:10px;">
+          <span>DSL 結果（草稿）</span>
+          <textarea id="ruleVersionDsl" rows="6" readonly></textarea>
+        </label>
+        <div class="muted" id="ruleVersionStatus" style="white-space:pre-wrap;"></div>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn" id="btnRuleVersionActivate" disabled>採用此版本</button>
+        </div>
+      </div>
+    `,
+    onOk: async () => {},
+  });
+  $("#modalOk").textContent = "關閉";
+
+  let latestVersionId = null;
+  let activeController = null;
+
+  const renderVersionDetail = (version) => {
+    const report = version.validation_report || {};
+    const detail = $("#ruleVersionDetail");
+    detail.innerHTML = `
+      <div class="strong">版本 V${esc(version.version)}（${esc(formatValidationStatus(version.validation_status))}）</div>
+      <div class="muted">建立：${esc((version.created_at || "").toString().replace("T", " ").slice(0, 19))}</div>
+      <div class="strong" style="margin-top:8px;">自然語言</div>
+      <pre style="white-space:pre-wrap;margin:6px 0 0;">${esc(version.nl_text || "")}</pre>
+      <div class="strong" style="margin-top:8px;">DSL</div>
+      <pre style="white-space:pre-wrap;margin:6px 0 0;">${esc(version.dsl_text || "")}</pre>
+      <div class="strong" style="margin-top:8px;">反向翻譯</div>
+      <pre style="white-space:pre-wrap;margin:6px 0 0;">${esc(version.reverse_translation || "")}</pre>
+      <div class="strong" style="margin-top:8px;">驗證結果</div>
+      ${renderValidationReport(report)}
+      <div class="row" style="margin-top:10px;">
+        <button class="btn" data-version-act="compare" data-version-id="${version.id}">比對目前版本</button>
+        <button class="btn btn--primary" data-version-act="activate" data-version-id="${version.id}">採用此版本</button>
+      </div>
+    `;
+    detail.querySelectorAll("[data-version-act]").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        const target = e.currentTarget;
+        const act = target.dataset.versionAct;
+        if (act === "compare") return openRuleVersionCompare(rule, version);
+        if (act === "activate") {
+          await api(`/api/rules/${rule.id}/activate/${version.id}`, { method: "POST" });
+          toast("已採用版本", "good");
+          await loadRules();
+          await loadVersions();
+        }
+      });
+    });
+  };
+
+  const loadVersions = async () => {
+    const versions = await api(`/api/rules/${rule.id}/versions`);
+    if (!versions.length) {
+      $("#ruleVersionList").innerHTML = `<div class="muted">尚無版本</div>`;
+      $("#ruleVersionDetail").textContent = "尚未選擇版本";
+      return;
+    }
+    $("#ruleVersionList").innerHTML = versions
+      .map((v) => {
+        const dt = (v.created_at || "").toString().replace("T", " ").slice(0, 19);
+        return `
+          <div class="table" style="margin-bottom:8px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 10px;">
+              <div>
+                <div class="strong">V${esc(v.version)} · ${esc(formatValidationStatus(v.validation_status))}</div>
+                <div class="muted">${esc(dt)}</div>
+              </div>
+              <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <button class="btn btn--sm" data-version-act="preview" data-version-id="${v.id}">預覽</button>
+                <button class="btn btn--sm" data-version-act="compare" data-version-id="${v.id}">比對</button>
+                <button class="btn btn--sm" data-version-act="activate" data-version-id="${v.id}">採用</button>
+              </div>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    $("#ruleVersionList").querySelectorAll("[data-version-act]").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        const target = e.currentTarget;
+        const act = target.dataset.versionAct;
+        const versionId = target.dataset.versionId;
+        const version = versions.find((x) => String(x.id) === String(versionId));
+        if (!version) return;
+        if (act === "preview") return renderVersionDetail(version);
+        if (act === "compare") return openRuleVersionCompare(rule, version);
+        if (act === "activate") {
+          await api(`/api/rules/${rule.id}/activate/${version.id}`, { method: "POST" });
+          toast("已採用版本", "good");
+          await loadRules();
+          await loadVersions();
+          return;
+        }
+      });
+    });
+
+    renderVersionDetail(versions[0]);
+  };
+
+  $("#btnReloadVersions").addEventListener("click", () => loadVersions().catch((e) => toast(`載入失敗：${e.message}`, "bad")));
+  $("#btnRuleVersionClear").addEventListener("click", () => {
+    $("#ruleVersionNl").value = "";
+    $("#ruleVersionDsl").value = "";
+    $("#ruleVersionStatus").textContent = "";
+    $("#btnRuleVersionActivate").disabled = true;
+    latestVersionId = null;
+  });
+
+  $("#btnRuleVersionActivate").addEventListener("click", async () => {
+    if (!latestVersionId) return;
+    await api(`/api/rules/${rule.id}/activate/${latestVersionId}`, { method: "POST" });
+    toast("已採用版本", "good");
+    await loadRules();
+    await loadVersions();
+  });
+
+  $("#btnRuleVersionStream").addEventListener("click", async () => {
+    const text = $("#ruleVersionNl").value.trim();
+    if (!text) {
+      toast("請先輸入自然語言描述", "warn");
+      return;
+    }
+    if (activeController) activeController.abort();
+    activeController = new AbortController();
+    $("#ruleVersionDsl").value = "";
+    $("#ruleVersionStatus").textContent = "建立草稿中...";
+    $("#btnRuleVersionActivate").disabled = true;
+    latestVersionId = null;
+
+    try {
+      await streamRuleVersionFromNl(rule.id, text, {
+        signal: activeController.signal,
+        onDraft: (data) => {
+          latestVersionId = data.rule_version_id || null;
+          $("#ruleVersionStatus").textContent = `草稿版本已建立（V${data.version}）`;
+        },
+        onToken: (data) => {
+          $("#ruleVersionDsl").value += data.text || "";
+        },
+        onCompleted: (data) => {
+          if (data.dsl_text) $("#ruleVersionDsl").value = data.dsl_text;
+          $("#ruleVersionStatus").textContent = "轉譯完成，等待驗證結果...";
+        },
+        onValidated: async (data) => {
+          const issues = (data.issues || []).join("\n");
+          const warnings = (data.warnings || []).join("\n");
+          let statusText = `驗證：${data.status || "完成"}`;
+          if (issues) statusText += `\n錯誤：\n${issues}`;
+          if (warnings) statusText += `\n警告：\n${warnings}`;
+          $("#ruleVersionStatus").textContent = statusText;
+          $("#btnRuleVersionActivate").disabled = !latestVersionId;
+          await loadVersions();
+        },
+        onError: (data) => {
+          const message = data?.message || "轉譯失敗";
+          $("#ruleVersionStatus").textContent = message;
+          toast(message, "bad");
+        },
+      });
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      $("#ruleVersionStatus").textContent = err.message || "轉譯失敗";
+      toast(`轉譯失敗：${err.message}`, "bad");
+    }
+  });
+
+  loadVersions().catch((e) => toast(`載入失敗：${e.message}`, "bad"));
 }
 
 async function runValidateDsl() {
@@ -956,6 +1290,20 @@ async function boot() {
   $("#btnDslToNl").addEventListener("click", () => runDslToNl().catch((e) => toast(`反向翻譯失敗：${e.message}`, "bad")));
   $("#btnSaveRule").addEventListener("click", () => saveRuleFromPanel().catch((e) => toast(`儲存失敗：${e.message}`, "bad")));
   $("#btnReloadRules").addEventListener("click", () => loadRules().catch((e) => toast(`載入失敗：${e.message}`, "bad")));
+  $("#btnApplyRuleFilter").addEventListener("click", () => {
+    syncRuleFiltersFromUI();
+    loadRules().catch((e) => toast(`載入失敗：${e.message}`, "bad"));
+  });
+  $("#btnClearRuleFilter").addEventListener("click", () => {
+    resetRuleFilters();
+    loadRules().catch((e) => toast(`載入失敗：${e.message}`, "bad"));
+  });
+  $("#ruleFilterQ").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      syncRuleFiltersFromUI();
+      loadRules().catch((err) => toast(`載入失敗：${err.message}`, "bad"));
+    }
+  });
   $("#btnChatSend").addEventListener("click", sendRuleChat);
   $("#btnChatApplyToDsl").addEventListener("click", () => applyScratchToDsl("editor"));
   $("#btnScratchToDsl").addEventListener("click", () => applyScratchToDsl("editor"));

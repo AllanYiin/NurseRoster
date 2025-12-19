@@ -168,6 +168,35 @@
             <div class="card__hd">
               <div class="card__title">規則列表</div>
               <div class="card__actions">
+                <label class="field">
+                  <span>Scope</span>
+                  <select id="ruleFilterScopeType">
+                    <option value="">全部</option>
+                    <option value="GLOBAL">GLOBAL</option>
+                    <option value="HOSPITAL">HOSPITAL</option>
+                    <option value="DEPARTMENT">DEPARTMENT</option>
+                    <option value="NURSE">NURSE</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Scope ID</span>
+                  <input type="number" id="ruleFilterScopeId" placeholder="全部" />
+                </label>
+                <label class="field">
+                  <span>類型</span>
+                  <select id="ruleFilterType">
+                    <option value="">全部</option>
+                    <option value="HARD">HARD</option>
+                    <option value="SOFT">SOFT</option>
+                    <option value="PREFERENCE">PREFERENCE</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>關鍵字</span>
+                  <input type="text" id="ruleFilterQ" placeholder="標題 / NL / DSL" />
+                </label>
+                <button class="btn" id="btnApplyRuleFilter">篩選</button>
+                <button class="btn" id="btnClearRuleFilter">清除</button>
                 <button class="btn" id="btnReloadRules">重新載入</button>
               </div>
             </div>

@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from app.api.deps import db_session
 from app.db.session import get_session
-from app.models.entities import Rule, RuleVersion, ValidationStatus
+from app.models.entities import Rule, RuleScopeType, RuleType, RuleVersion, ValidationStatus
 from app.schemas.common import ok
 from app.services.rules import (
     sse_event,
@@ -62,8 +63,25 @@ def _validation_status(result: dict) -> ValidationStatus:
 
 
 @router.get("", response_model=None)
-def list_rules(project_id: int, s: Session = Depends(db_session)):
-    rows = s.exec(select(Rule).where(Rule.project_id == project_id).order_by(Rule.id)).all()
+def list_rules(
+    project_id: int,
+    scope_type: Optional[RuleScopeType] = None,
+    scope_id: Optional[int] = None,
+    type: Optional[RuleType] = None,
+    q: Optional[str] = None,
+    s: Session = Depends(db_session),
+):
+    stmt = select(Rule).where(Rule.project_id == project_id)
+    if scope_type:
+        stmt = stmt.where(Rule.scope_type == scope_type)
+    if scope_id is not None:
+        stmt = stmt.where(Rule.scope_id == scope_id)
+    if type:
+        stmt = stmt.where(Rule.rule_type == type)
+    if q:
+        keyword = f"%{q}%"
+        stmt = stmt.where(or_(Rule.title.ilike(keyword), Rule.nl_text.ilike(keyword), Rule.dsl_text.ilike(keyword)))
+    rows = s.exec(stmt.order_by(Rule.id)).all()
     return ok([r.model_dump() for r in rows])
 
 

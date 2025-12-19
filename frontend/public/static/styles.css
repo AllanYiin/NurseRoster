@@ -52,6 +52,7 @@ body{
 .grid{display:grid; grid-template-columns: 1fr 1fr; gap:16px}
 .card{background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow: var(--shadow)}
 .card__hd{padding:14px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between}
+.card__actions{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
 .card__bd{padding:16px}
 .btn{border:1px solid var(--border); background:#fff; padding:8px 10px; border-radius:12px; cursor:pointer}
 .btn.primary{background:var(--primary); border-color:var(--primary); color:white}
