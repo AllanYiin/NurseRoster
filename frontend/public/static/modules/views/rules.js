@@ -8,7 +8,7 @@ import { streamNlToDsl, streamRuleVersionFromNl } from "../streams.js";
 
 export function buildRuleQuery() {
   const params = new URLSearchParams();
-  params.set("project_id", state.project.id);
+  if (state.project?.id) params.set("project_id", state.project.id);
   if (state.ruleFilters.scope_type) params.set("scope_type", state.ruleFilters.scope_type);
   if (state.ruleFilters.scope_id) params.set("scope_id", state.ruleFilters.scope_id);
   if (state.ruleFilters.type) params.set("type", state.ruleFilters.type);
@@ -32,6 +32,14 @@ export function resetRuleFilters() {
 }
 
 export async function loadRules() {
+  if (!state.project?.id) {
+    const tbody = $("#rulesTable tbody");
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="4" class="muted">請先建立專案後再載入規則。</td></tr>`;
+    }
+    toast("目前沒有專案資料，請先建立專案。", "warn");
+    return;
+  }
   const rows = await api(`/api/rules?${buildRuleQuery()}`);
   const tbody = $("#rulesTable tbody");
   tbody.innerHTML = rows
