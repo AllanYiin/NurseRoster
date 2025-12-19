@@ -35,6 +35,12 @@ CONSTRAINT_NAMES = {
     "weekend_all_or_nothing",
     "min_full_weekends_off_in_window",
 }
+LEGACY_CONSTRAINT_NAMES = {
+    "daily_coverage",
+    "max_consecutive",
+    "prefer_off_after_night",
+    "rest_after_night",
+}
 OBJECTIVE_NAMES = {
     "balance_shift_count",
     "balance_weekend_shift_count",
@@ -141,6 +147,29 @@ def _load_dsl_obj(dsl_text: str) -> tuple[dict | None, list[str]]:
     return obj, issues
 
 
+def _is_legacy_dsl(obj: dict) -> bool:
+    return "dsl_version" not in obj and isinstance(obj.get("constraints"), (list, dict))
+
+
+def _normalize_legacy_dsl(obj: dict, rule: Rule | None) -> dict:
+    scope_type = rule.scope_type.value if rule else RuleScopeType.GLOBAL.value
+    scope_id = rule.scope_id if rule else None
+    rule_id = rule.id if rule and rule.id is not None else "LEGACY_RULE"
+    return {
+        "dsl_version": DEFAULT_DSL_VERSION,
+        "id": str(obj.get("id") or rule_id),
+        "name": str(obj.get("name") or obj.get("description") or "未命名規則"),
+        "scope": obj.get("scope") or {"type": scope_type, "id": scope_id},
+        "type": obj.get("type") or (rule.rule_type.value if rule else RuleType.HARD.value),
+        "priority": obj.get("priority") if obj.get("priority") is not None else (rule.priority if rule else 0),
+        "enabled": obj.get("enabled") if obj.get("enabled") is not None else (rule.is_enabled if rule else True),
+        "tags": obj.get("tags") or [],
+        "notes": obj.get("notes") or obj.get("description") or "",
+        "constraints": obj.get("constraints") or [],
+        "objectives": obj.get("objectives") or [],
+    }
+
+
 def _available_shift_codes(session: Session | None) -> set[str]:
     codes: set[str] = set()
     if session:
@@ -211,6 +240,7 @@ def _extract_constraints_from_obj(
     scope_id: Optional[str],
     priority: int,
     rule_id: Optional[int],
+    legacy_mode: bool = False,
 ) -> tuple[list[RuleConstraint], list[str], list[str]]:
     constraints: list[RuleConstraint] = []
     issues: list[str] = []
@@ -224,17 +254,20 @@ def _extract_constraints_from_obj(
     if isinstance(raw_objectives, dict):
         raw_objectives = [raw_objectives]
 
-    if rule_type == RuleType.HARD and not raw_constraints:
-        issues.append("type=HARD 時 constraints 不得為空。")
-    if rule_type in (RuleType.SOFT, RuleType.PREFERENCE) and not raw_objectives:
-        issues.append("type=SOFT/PREFERENCE 時 objectives 不得為空。")
-    if rule_type == RuleType.HARD and raw_objectives:
-        warnings.append("type=HARD 時仍提供 objectives，已忽略。")
-    if rule_type in (RuleType.SOFT, RuleType.PREFERENCE) and raw_constraints:
-        warnings.append("type=SOFT/PREFERENCE 時仍提供 constraints，已忽略。")
+    if not legacy_mode:
+        if rule_type == RuleType.HARD and not raw_constraints:
+            issues.append("type=HARD 時 constraints 不得為空。")
+        if rule_type in (RuleType.SOFT, RuleType.PREFERENCE) and not raw_objectives:
+            issues.append("type=SOFT/PREFERENCE 時 objectives 不得為空。")
+        if rule_type == RuleType.HARD and raw_objectives:
+            warnings.append("type=HARD 時仍提供 objectives，已忽略。")
+        if rule_type in (RuleType.SOFT, RuleType.PREFERENCE) and raw_constraints:
+            warnings.append("type=SOFT/PREFERENCE 時仍提供 constraints，已忽略。")
 
     items: list[tuple[str, dict, int]] = []
-    if rule_type == RuleType.HARD:
+    if legacy_mode and raw_constraints:
+        items = [("constraints", item, idx) for idx, item in enumerate(raw_constraints)]
+    elif rule_type == RuleType.HARD:
         items = [("constraints", item, idx) for idx, item in enumerate(raw_constraints)]
     else:
         items = [("objectives", item, idx) for idx, item in enumerate(raw_objectives)]
@@ -247,7 +280,7 @@ def _extract_constraints_from_obj(
         if not name:
             issues.append(f"{prefix}[{idx}] 缺少 name。")
             continue
-        if prefix == "constraints" and name not in CONSTRAINT_NAMES:
+        if prefix == "constraints" and name not in (CONSTRAINT_NAMES | LEGACY_CONSTRAINT_NAMES):
             issues.append(f"{prefix}[{idx}] 未支援的 constraint name：{name}。")
         if prefix == "objectives" and name not in OBJECTIVE_NAMES:
             issues.append(f"{prefix}[{idx}] 未支援的 objective name：{name}。")
@@ -279,6 +312,22 @@ def _extract_constraints_from_obj(
                 except Exception:
                     issues.append(f"{prefix}[{idx}] weight 必須為數字。")
                     weight_val = None
+
+        legacy_param_keys = {
+            "shift",
+            "shift_code",
+            "shift_codes",
+            "min",
+            "max",
+            "max_days",
+            "required",
+            "off_code",
+            "weight",
+        }
+        if legacy_mode:
+            for key in legacy_param_keys:
+                if key in raw and key not in params:
+                    params[key] = raw.get(key)
 
         merged_params = {
             **params,
@@ -471,6 +520,10 @@ def dsl_to_nl(dsl_text: str) -> str:
     if issues or not obj:
         return "無法解析 DSL（請確認格式為 YAML）。"
 
+    legacy_mode = _is_legacy_dsl(obj)
+    if legacy_mode:
+        obj = _normalize_legacy_dsl(obj, None)
+
     scope_type, scope_id, _ = _parse_scope(obj, None)
     raw_type = str(obj.get("type") or RuleType.HARD.value).upper()
     try:
@@ -486,6 +539,7 @@ def dsl_to_nl(dsl_text: str) -> str:
         scope_id=scope_id,
         priority=priority,
         rule_id=None,
+        legacy_mode=legacy_mode,
     )
 
     parts: list[str] = []
@@ -591,6 +645,10 @@ def validate_dsl(dsl_text: str, *, session: Session | None = None, rule: Rule | 
     if parse_issues or not obj:
         return {"ok": False, "issues": parse_issues, "warnings": []}
 
+    legacy_mode = _is_legacy_dsl(obj)
+    if legacy_mode:
+        obj = _normalize_legacy_dsl(obj, rule)
+
     dsl_version = obj.get("dsl_version")
     if not dsl_version:
         issues.append("缺少 dsl_version。")
@@ -654,6 +712,7 @@ def validate_dsl(dsl_text: str, *, session: Session | None = None, rule: Rule | 
         scope_id=scope_id,
         priority=priority,
         rule_id=rule.id if isinstance(rule, Rule) else None,
+        legacy_mode=legacy_mode,
     )
     issues.extend(constraint_issues)
     warnings.extend(constraint_warnings)
