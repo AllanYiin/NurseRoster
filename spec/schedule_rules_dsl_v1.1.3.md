@@ -363,7 +363,7 @@ C) **日期/集合工具（where 或編譯輔助）
 
 ### 11.2 不建議（v1 禁止）
 
-* 在 where 中呼叫會依賴解的函數：`assigned(...)`、`count_assigned(...)`
+* 在 where 中呼叫會依賴解的函數：`assigned(...)`、`count_assigned(...)`、`count_consecutive_*`、`coverage_*`
 * 在 where 中做複雜數學（會讓可預測性下降）
 
 ---

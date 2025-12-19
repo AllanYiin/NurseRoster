@@ -62,8 +62,10 @@ FORBIDDEN_WHERE_FUNCTIONS = {
     "count_work_days",
     "shift_of",
 }
+FORBIDDEN_WHERE_PREFIXES = ("count_consecutive_", "coverage_")
 SUPPORTED_FOR_EACH = {"nurses", "days", "shifts"}
 ALLOWED_DSL_MAJOR = "1."
+DSL_VERSION_PATTERN = re.compile(r"^1\.\d+(\.\d+)?$")
 
 
 @dataclass
@@ -168,6 +170,8 @@ def _parse_scope(obj: dict, rule: Rule | None) -> tuple[RuleScopeType, Optional[
     if scope_id is not None:
         scope_id = str(scope_id)
     return scope_type, scope_id, warnings
+
+
 def _validate_where_expression(expr: object, path: str, issues: list[str], warnings: list[str]) -> None:
     if expr is None:
         return
@@ -179,14 +183,17 @@ def _validate_where_expression(expr: object, path: str, issues: list[str], warni
         warnings.append(f"{path} 為空字串，已忽略。")
         return
 
-    lowered = expr_text.lower()
-    for fn in FORBIDDEN_WHERE_FUNCTIONS:
-        if re.search(rf\"\\b{re.escape(fn)}\\s*\\(\", lowered):
-            issues.append(f\"{path} 不允許使用 {fn}（依賴解或不可編譯）。\")
-    for match in re.finditer(r\"\\b([A-Za-z_][A-Za-z0-9_]*)\\s*\\(\", expr_text):
+    for match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", expr_text):
         fn_name = match.group(1)
-        if fn_name.lower() not in ALLOWED_WHERE_FUNCTIONS:
-            warnings.append(f\"{path} 出現未知函數：{fn_name}，請確認是否為可用函數。\")
+        fn_lower = fn_name.lower()
+        if fn_lower in FORBIDDEN_WHERE_FUNCTIONS:
+            issues.append(f"{path} 不允許使用 {fn_name}（依賴解或不可編譯）。")
+            continue
+        if any(fn_lower.startswith(prefix) for prefix in FORBIDDEN_WHERE_PREFIXES):
+            issues.append(f"{path} 不允許使用 {fn_name}（依賴解或不可編譯）。")
+            continue
+        if fn_lower not in ALLOWED_WHERE_FUNCTIONS:
+            warnings.append(f"{path} 出現未知函數：{fn_name}，請確認是否為可用函數。")
 
 
 def _validate_for_each(value: object, path: str, issues: list[str]) -> None:
@@ -596,6 +603,8 @@ def validate_dsl(dsl_text: str, *, session: Session | None = None, rule: Rule | 
     if not isinstance(dsl_version, str):
         issues.append("dsl_version 必須為字串。")
         dsl_version = str(dsl_version)
+    elif not DSL_VERSION_PATTERN.match(dsl_version):
+        issues.append(f"dsl_version 格式錯誤：{dsl_version}")
     elif not dsl_version.startswith(ALLOWED_DSL_MAJOR):
         issues.append(f"dsl_version 不相容：{dsl_version}")
     elif dsl_version != DEFAULT_DSL_VERSION:
