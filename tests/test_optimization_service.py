@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 
 from sqlmodel import select
 
-from app.models.entities import Assignment, JobStatus, OptimizationJob, Project, ProjectSnapshot, Rule
+from app.models.entities import Assignment, JobStatus, Nurse, OptimizationJob, Project, ProjectSnapshot, Rule
 from app.services import optimization
 
 
@@ -98,3 +99,111 @@ def test_apply_job_result_creates_snapshot(test_context):
     with test_context["make_session"]() as session:
         assignments = session.exec(select(Assignment).where(Assignment.project_id == project_id)).all()
         assert assignments and assignments[0].shift_code == "N"
+
+
+def test_parse_dsl_rules_for_new_constraints_and_objectives(test_context):
+    with test_context["make_session"]() as session:
+        project = Project(name="解析 DSL v1.1.3", month="2024-02")
+        session.add(project)
+        session.commit()
+        session.refresh(project)
+
+        session.add_all(
+            [
+                Nurse(
+                    staff_no="N001",
+                    name="護理師一",
+                    department_code="D1",
+                    job_level_code="L1",
+                    skills_csv="VENT,ICU",
+                ),
+                Nurse(
+                    staff_no="N002",
+                    name="護理師二",
+                    department_code="D1",
+                    job_level_code="L1",
+                    skills_csv="ICU",
+                ),
+            ]
+        )
+        session.commit()
+
+        hard_rule = Rule(
+            project_id=project.id,
+            title="硬性規則",
+            dsl_text=json.dumps(
+                {
+                    "dsl_version": "1.0",
+                    "id": "R-HARD",
+                    "name": "硬性",
+                    "scope": {"type": "GLOBAL", "id": None},
+                    "type": "HARD",
+                    "priority": 100,
+                    "enabled": True,
+                    "constraints": [
+                        {"id": "C1", "name": "coverage_required", "params": {"shift_codes": ["D"], "required": 2}},
+                        {"id": "C2", "name": "max_consecutive_shift", "params": {"shift_codes": ["N"], "max_days": 3}},
+                        {"id": "C3", "name": "forbid_transition", "params": {"from": "E", "to": "N"}},
+                        {"id": "C4", "name": "rest_after_shift", "params": {"shift_codes": ["N"], "rest_days": 1}},
+                        {
+                            "id": "C5",
+                            "name": "max_assignments_in_window",
+                            "params": {"window_days": 3, "max_assignments": 2, "shift_codes": ["D"]},
+                        },
+                        {
+                            "id": "C6",
+                            "name": "skill_coverage",
+                            "params": {"skill_codes": ["VENT"], "required": 1, "shift_codes": ["D"]},
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            is_enabled=True,
+        )
+        soft_rule = Rule(
+            project_id=project.id,
+            title="軟性規則",
+            dsl_text=json.dumps(
+                {
+                    "dsl_version": "1.0",
+                    "id": "R-SOFT",
+                    "name": "軟性",
+                    "scope": {"type": "GLOBAL", "id": None},
+                    "type": "SOFT",
+                    "priority": 100,
+                    "enabled": True,
+                    "objectives": [
+                        {"id": "O1", "name": "balance_shift_count", "weight": 5, "params": {"shift_codes": ["D"]}},
+                        {"id": "O2", "name": "penalize_transition", "weight": 7, "params": {"from": "D", "to": "N"}},
+                        {"id": "O3", "name": "prefer_off_on_weekends", "weight": 3},
+                        {
+                            "id": "O4",
+                            "name": "penalize_consecutive_same_shift",
+                            "weight": 9,
+                            "params": {"shift_codes": ["E"]},
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            is_enabled=True,
+        )
+        session.add(hard_rule)
+        session.add(soft_rule)
+        session.commit()
+
+        nurses = session.exec(select(Nurse)).all()
+        conf = optimization._parse_enabled_rules(session, project.id, nurses)
+
+    assert conf["coverage"]["D"] == 2
+    assert conf["max_consecutive"]["N"] == 3
+    assert conf["forbid_sequences"] == [{"from": "E", "to": "N", "staff": None}]
+    assert conf["rest_after_shift_rules"][0]["shift_codes"] == ["N"]
+    assert conf["max_assignments_in_window"][0]["max_assignments"] == 2
+    assert conf["skill_coverage_rules"][0]["required"] == 1
+    assert "N001" in conf["skill_coverage_rules"][0]["staff"]
+    assert conf["weekend_off_weight"] == 3
+    assert conf["avoid_sequences"] == [{"from": "D", "to": "N", "weight": 7}]
+    assert conf["balance_shift_rules"][0]["shift_codes"] == ["D"]
+    assert conf["consecutive_shift_penalties"][0]["shift_codes"] == ["E"]
