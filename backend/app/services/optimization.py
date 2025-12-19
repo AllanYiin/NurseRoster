@@ -10,7 +10,17 @@ from typing import Dict, Generator, List, Tuple
 from sqlmodel import Session, delete, select
 
 from app.db.session import get_session
-from app.models.entities import Assignment, JobStatus, Nurse, OptimizationJob, Project, ProjectSnapshot, ShiftCode
+from app.models.entities import (
+    Assignment,
+    Department,
+    JobStatus,
+    Nurse,
+    OptimizationJob,
+    Project,
+    ProjectSnapshot,
+    RuleScopeType,
+    ShiftCode,
+)
 from app.schemas.common import err
 from app.services.rules import resolve_project_rules
 
@@ -50,6 +60,14 @@ def penalty_weight(weight: int, multipliers: dict, key: str) -> int:
             mul = 1
     base = int(weight)
     return max(1, base * mul)
+
+
+def _weekend_pairs(days: List[date]) -> List[Tuple[int, int]]:
+    pairs: List[Tuple[int, int]] = []
+    for i in range(len(days) - 1):
+        if days[i].weekday() == 5 and days[i + 1].weekday() == 6:
+            pairs.append((i, i + 1))
+    return pairs
 
 
 def enqueue_job(session: Session, payload: dict) -> OptimizationJob:
@@ -155,6 +173,13 @@ def _parse_enabled_rules(session: Session, project_id: int, nurses: List[Nurse])
         "avoid_sequences": [],
         "unavailable_dates": {},
         "preferences": {},
+        "min_full_weekends_off": [],
+        "weekend_all_or_nothing": [],
+        "min_consecutive_off_days": [],
+        "max_work_days_in_window": [],
+        "novice_senior_pairs": [],
+        "single_off_penalties": [],
+        "weekend_balance_rules": [],
         "conflicts": [],
     }
 
@@ -211,6 +236,137 @@ def _parse_enabled_rules(session: Session, project_id: int, nurses: List[Nurse])
                     continue
             if parsed_dates:
                 conf["unavailable_dates"].setdefault(staff_no, set()).update(parsed_dates)
+        elif c.name == "min_full_weekends_off_in_window":
+            try:
+                window_days = int(c.params.get("window_days") or 0)
+                min_full_weekends_off = int(c.params.get("min_full_weekends_off") or 0)
+            except Exception:
+                continue
+            if window_days <= 0 or min_full_weekends_off <= 0:
+                continue
+            conf["min_full_weekends_off"].append(
+                {
+                    "window_days": window_days,
+                    "min_full_weekends_off": min_full_weekends_off,
+                    "weekend_def": str(c.params.get("weekend_def") or "SAT_SUN"),
+                    "off_code": str(c.params.get("off_code") or "OFF"),
+                    "sliding": bool(c.params.get("sliding", True)),
+                }
+            )
+        elif c.name == "weekend_all_or_nothing":
+            conf["weekend_all_or_nothing"].append(
+                {
+                    "weekend_def": str(c.params.get("weekend_def") or "SAT_SUN"),
+                    "off_code": str(c.params.get("off_code") or "OFF"),
+                }
+            )
+        elif c.name == "min_consecutive_off_days":
+            try:
+                min_days = int(c.params.get("min_days") or 0)
+            except Exception:
+                continue
+            if min_days <= 1:
+                continue
+            conf["min_consecutive_off_days"].append(
+                {
+                    "min_days": min_days,
+                    "allow_at_period_edges": bool(c.params.get("allow_at_period_edges", True)),
+                    "off_code": str(c.params.get("off_code") or "OFF"),
+                }
+            )
+        elif c.name == "max_work_days_in_rolling_window":
+            try:
+                window_days = int(c.params.get("window_days") or 0)
+                max_work_days = int(c.params.get("max_work_days") or 0)
+            except Exception:
+                continue
+            if window_days <= 0 or max_work_days <= 0:
+                continue
+            include_shifts = c.params.get("include_shifts") or []
+            conf["max_work_days_in_window"].append(
+                {
+                    "window_days": window_days,
+                    "max_work_days": max_work_days,
+                    "include_shifts": include_shifts if isinstance(include_shifts, list) else [],
+                    "sliding": bool(c.params.get("sliding", True)),
+                }
+            )
+        elif c.name == "if_novice_present_then_senior_present":
+            shifts = c.params.get("shifts") or []
+            novice_group = c.params.get("novice_group") or {}
+            senior_group = c.params.get("senior_group") or {}
+            novice_levels = novice_group.get("by_job_levels") or []
+            senior_levels = senior_group.get("by_job_levels") or []
+            try:
+                min_senior = int(c.params.get("min_senior") or 1)
+                trigger = int(c.params.get("trigger_if_novice_count_ge") or 1)
+            except Exception:
+                continue
+            dept_code = str(c.params.get("department_id") or "").strip()
+            if not dept_code and c.scope_type == RuleScopeType.DEPT and c.scope_id:
+                dept = session.get(Department, c.scope_id)
+                dept_code = dept.code if dept else ""
+            if min_senior <= 0 or trigger <= 0:
+                continue
+            if not novice_levels or not senior_levels:
+                continue
+            filtered_nurses = nurses
+            if dept_code:
+                filtered_nurses = [n for n in nurses if n.department_code == dept_code]
+            novice_staff = [n.staff_no for n in filtered_nurses if n.job_level_code in set(novice_levels)]
+            senior_staff = [n.staff_no for n in filtered_nurses if n.job_level_code in set(senior_levels)]
+            if not novice_staff or not senior_staff:
+                continue
+            conf["novice_senior_pairs"].append(
+                {
+                    "shifts": shifts if isinstance(shifts, list) else [],
+                    "novice_staff": novice_staff,
+                    "senior_staff": senior_staff,
+                    "min_senior": min_senior,
+                    "trigger": trigger,
+                }
+            )
+        elif c.name == "max_consecutive_same_shift":
+            try:
+                max_days = int(c.params.get("max_days") or 0)
+            except Exception:
+                continue
+            if max_days <= 0:
+                continue
+            shift_codes = c.params.get("shift_codes") or []
+            if not isinstance(shift_codes, list):
+                continue
+            for sc in shift_codes:
+                sc_norm = str(sc).strip()
+                if not sc_norm:
+                    continue
+                current = conf["max_consecutive"].get(sc_norm, max_days)
+                conf["max_consecutive"][sc_norm] = min(current, max_days)
+        elif c.name == "penalize_single_off_day":
+            weight = int(c.weight or c.params.get("weight") or 1)
+            penalty = int(c.params.get("penalty") or 1)
+            if weight > 0 and penalty > 0:
+                conf["single_off_penalties"].append(
+                    {
+                        "weight": weight,
+                        "penalty": penalty,
+                        "off_code": str(c.params.get("off_code") or "OFF"),
+                    }
+                )
+        elif c.name == "balance_weekend_shift_count":
+            weight = int(c.weight or c.params.get("weight") or 1)
+            if weight <= 0:
+                continue
+            shifts = c.params.get("shifts") or []
+            metric = str(c.params.get("metric") or "range")
+            conf["weekend_balance_rules"].append(
+                {
+                    "weight": weight,
+                    "shifts": shifts if isinstance(shifts, list) else [],
+                    "weekend_days": str(c.params.get("weekend_days") or "SAT_SUN"),
+                    "metric": metric,
+                }
+            )
         elif c.category in {"soft", "preference"} and c.scope_id in nurse_id_to_staff and c.shift_code:
             staff_no = nurse_id_to_staff.get(c.scope_id)
             if not staff_no:
@@ -281,6 +437,13 @@ def _solve_assignments(
     weekend_off_weight: int,
     avoid_sequences: List[dict],
     preferences: Dict[str, List[dict]],
+    min_full_weekends_off_rules: List[dict],
+    weekend_all_or_nothing_rules: List[dict],
+    min_consecutive_off_rules: List[dict],
+    max_work_days_window_rules: List[dict],
+    novice_senior_rules: List[dict],
+    single_off_penalties: List[dict],
+    weekend_balance_rules: List[dict],
     objective_multipliers: dict,
     time_limit_seconds: int,
     random_seed: int | None,
@@ -317,12 +480,127 @@ def _solve_assignments(
                 window = days[start_i : start_i + mx + 1]
                 model.Add(sum(x[(n, d, sc)] for d in window) <= mx)
 
+    weekend_pairs = _weekend_pairs(days)
+
     if rest_after_night_hard and "N" in idx_s:
         for n in nurse_ids:
             for i in range(len(days) - 1):
                 d = days[i]
                 d2 = days[i + 1]
                 model.Add(x[(n, d, "N")] + sum(x[(n, d2, sc)] for sc in shift_codes if sc != "OFF") <= 1)
+
+    if weekend_all_or_nothing_rules and "OFF" in idx_s and weekend_pairs:
+        for rule in weekend_all_or_nothing_rules:
+            off_code = rule.get("off_code") or "OFF"
+            if off_code not in idx_s:
+                continue
+            for n in nurse_ids:
+                for sat_idx, sun_idx in weekend_pairs:
+                    d_sat = days[sat_idx]
+                    d_sun = days[sun_idx]
+                    model.Add(x[(n, d_sat, off_code)] == x[(n, d_sun, off_code)])
+
+    if min_consecutive_off_rules and "OFF" in idx_s:
+        for rule in min_consecutive_off_rules:
+            off_code = rule.get("off_code") or "OFF"
+            if off_code not in idx_s:
+                continue
+            min_days = int(rule.get("min_days") or 0)
+            if min_days <= 1:
+                continue
+            allow_edges = bool(rule.get("allow_at_period_edges", True))
+            for n in nurse_ids:
+                for i, d in enumerate(days):
+                    start_off = model.NewBoolVar(f"start_off_{n}_{d.isoformat()}_{min_days}")
+                    if i == 0:
+                        model.Add(start_off == x[(n, d, off_code)])
+                    else:
+                        model.Add(start_off <= x[(n, d, off_code)])
+                        model.Add(start_off <= 1 - x[(n, days[i - 1], off_code)])
+                        model.Add(start_off >= x[(n, d, off_code)] - x[(n, days[i - 1], off_code)])
+                    if i + min_days - 1 >= len(days):
+                        if not allow_edges:
+                            model.Add(start_off == 0)
+                        continue
+                    for r in range(1, min_days):
+                        model.Add(x[(n, days[i + r], off_code)] >= start_off)
+
+    if min_full_weekends_off_rules and "OFF" in idx_s and weekend_pairs:
+        for rule in min_full_weekends_off_rules:
+            off_code = rule.get("off_code") or "OFF"
+            if off_code not in idx_s:
+                continue
+            window_days = int(rule.get("window_days") or 0)
+            min_full_weekends_off = int(rule.get("min_full_weekends_off") or 0)
+            if window_days <= 0 or min_full_weekends_off <= 0:
+                continue
+            sliding = bool(rule.get("sliding", True))
+            start_indices = (
+                range(0, len(days) - window_days + 1)
+                if sliding
+                else range(0, len(days) - window_days + 1, window_days)
+            )
+            for n in nurse_ids:
+                full_weekend_vars: dict[int, cp_model.IntVar] = {}
+                for sat_idx, sun_idx in weekend_pairs:
+                    sat_day = days[sat_idx]
+                    sun_day = days[sun_idx]
+                    full_off = model.NewBoolVar(f"full_weekend_off_{n}_{sat_day.isoformat()}_{off_code}")
+                    model.Add(full_off <= x[(n, sat_day, off_code)])
+                    model.Add(full_off <= x[(n, sun_day, off_code)])
+                    model.Add(full_off >= x[(n, sat_day, off_code)] + x[(n, sun_day, off_code)] - 1)
+                    full_weekend_vars[sat_idx] = full_off
+                for start in start_indices:
+                    end = start + window_days
+                    full_weekends = [
+                        full_weekend_vars[sat_idx]
+                        for sat_idx, sun_idx in weekend_pairs
+                        if sat_idx >= start and sun_idx < end
+                    ]
+                    if full_weekends:
+                        model.Add(sum(full_weekends) >= min_full_weekends_off)
+
+    if max_work_days_window_rules:
+        for rule in max_work_days_window_rules:
+            window_days = int(rule.get("window_days") or 0)
+            max_work_days = int(rule.get("max_work_days") or 0)
+            if window_days <= 0 or max_work_days <= 0:
+                continue
+            include_shifts = [sc for sc in (rule.get("include_shifts") or []) if sc in idx_s]
+            if not include_shifts:
+                include_shifts = [sc for sc in shift_codes if sc != "OFF"]
+            sliding = bool(rule.get("sliding", True))
+            start_indices = (
+                range(0, len(days) - window_days + 1)
+                if sliding
+                else range(0, len(days) - window_days + 1, window_days)
+            )
+            for n in nurse_ids:
+                for start in start_indices:
+                    window = days[start : start + window_days]
+                    model.Add(sum(x[(n, d, sc)] for d in window for sc in include_shifts) <= max_work_days)
+
+    if novice_senior_rules:
+        for rule in novice_senior_rules:
+            shifts = [sc for sc in (rule.get("shifts") or []) if sc in idx_s]
+            if not shifts:
+                shifts = [sc for sc in shift_codes if sc != "OFF"]
+            novice_staff = rule.get("novice_staff") or []
+            senior_staff = rule.get("senior_staff") or []
+            min_senior = int(rule.get("min_senior") or 1)
+            trigger = int(rule.get("trigger") or 1)
+            if not novice_staff or not senior_staff or min_senior <= 0 or trigger <= 0:
+                continue
+            for d in days:
+                for sc in shifts:
+                    nov_cnt = model.NewIntVar(0, len(novice_staff), f"nov_cnt_{d.isoformat()}_{sc}")
+                    sen_cnt = model.NewIntVar(0, len(senior_staff), f"sen_cnt_{d.isoformat()}_{sc}")
+                    model.Add(nov_cnt == sum(x[(n, d, sc)] for n in novice_staff))
+                    model.Add(sen_cnt == sum(x[(n, d, sc)] for n in senior_staff))
+                    trigger_var = model.NewBoolVar(f"nov_trigger_{d.isoformat()}_{sc}")
+                    model.Add(nov_cnt >= trigger).OnlyEnforceIf(trigger_var)
+                    model.Add(nov_cnt < trigger).OnlyEnforceIf(trigger_var.Not())
+                    model.Add(sen_cnt >= min_senior).OnlyEnforceIf(trigger_var)
 
     if unavailable_dates:
         for n, blocked in unavailable_dates.items():
@@ -388,6 +666,27 @@ def _solve_assignments(
                         model.Add(x[(n, d, sc)] == 1).OnlyEnforceIf(miss.Not())
                         penalties.append(penalty_weight(w, objective_multipliers, "personal_preference") * miss)
 
+    if single_off_penalties and "OFF" in idx_s:
+        for rule in single_off_penalties:
+            weight = int(rule.get("weight") or 0)
+            penalty = int(rule.get("penalty") or 0)
+            off_code = rule.get("off_code") or "OFF"
+            if weight <= 0 or penalty <= 0 or off_code not in idx_s:
+                continue
+            for n in nurse_ids:
+                for i in range(1, len(days) - 1):
+                    d = days[i]
+                    prev_d = days[i - 1]
+                    next_d = days[i + 1]
+                    single = model.NewBoolVar(f"single_off_{n}_{d.isoformat()}_{off_code}")
+                    model.AddBoolAnd(
+                        [x[(n, d, off_code)], cp_model.Not(x[(n, prev_d, off_code)]), cp_model.Not(x[(n, next_d, off_code)])]
+                    ).OnlyEnforceIf(single)
+                    model.AddBoolOr(
+                        [cp_model.Not(x[(n, d, off_code)]), x[(n, prev_d, off_code)], x[(n, next_d, off_code)]]
+                    ).OnlyEnforceIf(single.Not())
+                    penalties.append(penalty_weight(weight * penalty, objective_multipliers, "single_off_day") * single)
+
     objective_terms = []
     if penalties:
         objective_terms.append(sum(penalties))
@@ -406,6 +705,31 @@ def _solve_assignments(
         model.Add(rng == mx_v - mn_v)
         fairness_weight = objective_multipliers.get("night_fairness") or objective_multipliers.get("fairness") or 5
         objective_terms.append(max(0, int(fairness_weight)) * rng)
+
+    if weekend_balance_rules and weekend_pairs:
+        weekend_days = [days[i] for pair in weekend_pairs for i in pair]
+        weekend_days = list(dict.fromkeys(weekend_days))
+        for rule in weekend_balance_rules:
+            weight = int(rule.get("weight") or 0)
+            if weight <= 0:
+                continue
+            shifts = [sc for sc in (rule.get("shifts") or []) if sc in idx_s]
+            if not shifts:
+                shifts = [sc for sc in shift_codes if sc != "OFF"]
+            counts = []
+            for n in nurse_ids:
+                cnt = model.NewIntVar(0, len(weekend_days), f"weekend_cnt_{n}")
+                model.Add(cnt == sum(x[(n, d, sc)] for d in weekend_days for sc in shifts))
+                counts.append(cnt)
+            if not counts:
+                continue
+            mx_v = model.NewIntVar(0, len(weekend_days), "weekend_max")
+            mn_v = model.NewIntVar(0, len(weekend_days), "weekend_min")
+            model.AddMaxEquality(mx_v, counts)
+            model.AddMinEquality(mn_v, counts)
+            rng = model.NewIntVar(0, len(weekend_days), "weekend_range")
+            model.Add(rng == mx_v - mn_v)
+            objective_terms.append(penalty_weight(weight, objective_multipliers, "weekend_balance") * rng)
 
     if objective_terms:
         model.Minimize(sum(objective_terms))
@@ -537,6 +861,13 @@ def stream_job_run(job_id: int) -> Generator[str, None, None]:
             "weekend_off_weight": rules_conf.get("weekend_off_weight"),
             "night_fairness_weight": rules_conf.get("night_fairness_weight"),
             "avoid_sequences": rules_conf.get("avoid_sequences") or [],
+            "min_full_weekends_off": rules_conf.get("min_full_weekends_off") or [],
+            "weekend_all_or_nothing": rules_conf.get("weekend_all_or_nothing") or [],
+            "min_consecutive_off_days": rules_conf.get("min_consecutive_off_days") or [],
+            "max_work_days_in_window": rules_conf.get("max_work_days_in_window") or [],
+            "novice_senior_pairs": rules_conf.get("novice_senior_pairs") or [],
+            "single_off_penalties": rules_conf.get("single_off_penalties") or [],
+            "weekend_balance_rules": rules_conf.get("weekend_balance_rules") or [],
             "unavailable_dates": {k: sorted([d.isoformat() for d in v]) for k, v in (rules_conf.get("unavailable_dates") or {}).items()},
             "rule_conflicts": rules_conf.get("conflicts") or [],
         }
@@ -605,6 +936,13 @@ def stream_job_run(job_id: int) -> Generator[str, None, None]:
                 int(rules_conf.get("weekend_off_weight") or 0),
                 rules_conf.get("avoid_sequences") or [],
                 rules_conf.get("preferences") or {},
+                rules_conf.get("min_full_weekends_off") or [],
+                rules_conf.get("weekend_all_or_nothing") or [],
+                rules_conf.get("min_consecutive_off_days") or [],
+                rules_conf.get("max_work_days_in_window") or [],
+                rules_conf.get("novice_senior_pairs") or [],
+                rules_conf.get("single_off_penalties") or [],
+                rules_conf.get("weekend_balance_rules") or [],
                 objective_multipliers,
                 int(job.time_limit_seconds or 10),
                 job.random_seed,
