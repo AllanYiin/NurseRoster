@@ -137,14 +137,50 @@ def _mock_nl_to_dsl_events(nl_text: str) -> Iterable[Tuple[str, dict]]:
 
 def _load_dsl_obj(dsl_text: str) -> tuple[dict | None, list[str]]:
     issues: list[str] = []
+    raw_text = dsl_text or ""
     try:
-        obj = yaml.safe_load(dsl_text or "")
+        obj = yaml.safe_load(raw_text)
     except Exception as exc:
-        return None, [f"DSL 解析失敗：{exc}"]
+        normalized = _normalize_yaml_indentation(raw_text)
+        if normalized != raw_text:
+            try:
+                obj = yaml.safe_load(normalized)
+            except Exception:
+                return None, [f"DSL 解析失敗：{exc}"]
+        else:
+            return None, [f"DSL 解析失敗：{exc}"]
     if not isinstance(obj, dict):
         issues.append("根節點必須為 YAML/JSON object。")
         return None, issues
     return obj, issues
+
+
+def _normalize_yaml_indentation(dsl_text: str) -> str:
+    lines = dsl_text.splitlines()
+    non_empty = [(idx, line) for idx, line in enumerate(lines) if line.strip()]
+    if len(non_empty) < 2:
+        return dsl_text
+
+    def indent_of(line: str) -> int:
+        return len(line) - len(line.lstrip(" "))
+
+    first_indent = indent_of(non_empty[0][1])
+    second_indent = indent_of(non_empty[1][1])
+    if second_indent <= first_indent:
+        return dsl_text
+
+    shift = second_indent - first_indent
+    normalized_lines: list[str] = []
+    for line in lines:
+        if not line.strip():
+            normalized_lines.append(line)
+            continue
+        indent = indent_of(line)
+        if indent >= second_indent:
+            normalized_lines.append(line[shift:])
+        else:
+            normalized_lines.append(line)
+    return "\n".join(normalized_lines)
 
 
 def _is_legacy_dsl(obj: dict) -> bool:
