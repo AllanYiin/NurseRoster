@@ -363,6 +363,52 @@ def _extract_constraints_from_obj(
                     issues.append(f"constraints[{idx}] ({name}) min 必須大於 0。")
             except Exception:
                 issues.append(f"constraints[{idx}] ({name}) 缺少有效的 min。")
+        elif name == "min_full_weekends_off_in_window":
+            try:
+                window_days = int(merged_params.get("window_days"))
+                min_full = int(merged_params.get("min_full_weekends_off"))
+                merged_params["window_days"] = window_days
+                merged_params["min_full_weekends_off"] = min_full
+                if window_days <= 0 or min_full <= 0:
+                    issues.append(f"constraints[{idx}] ({name}) window_days/min_full_weekends_off 必須大於 0。")
+            except Exception:
+                issues.append(f"constraints[{idx}] ({name}) 缺少有效的 window_days/min_full_weekends_off。")
+        elif name == "min_consecutive_off_days":
+            try:
+                min_days = int(merged_params.get("min_days"))
+                merged_params["min_days"] = min_days
+                if min_days <= 1:
+                    issues.append(f"constraints[{idx}] ({name}) min_days 必須大於 1。")
+            except Exception:
+                issues.append(f"constraints[{idx}] ({name}) 缺少有效的 min_days。")
+        elif name == "max_work_days_in_rolling_window":
+            try:
+                window_days = int(merged_params.get("window_days"))
+                max_days = int(merged_params.get("max_work_days"))
+                merged_params["window_days"] = window_days
+                merged_params["max_work_days"] = max_days
+                if window_days <= 0 or max_days <= 0:
+                    issues.append(f"constraints[{idx}] ({name}) window_days/max_work_days 必須大於 0。")
+            except Exception:
+                issues.append(f"constraints[{idx}] ({name}) 缺少有效的 window_days/max_work_days。")
+        elif name == "max_consecutive_same_shift":
+            try:
+                max_days = int(merged_params.get("max_days"))
+                merged_params["max_days"] = max_days
+                if max_days <= 0:
+                    issues.append(f"constraints[{idx}] ({name}) max_days 必須大於 0。")
+            except Exception:
+                issues.append(f"constraints[{idx}] ({name}) 缺少有效的 max_days。")
+        elif name == "if_novice_present_then_senior_present":
+            try:
+                min_senior = int(merged_params.get("min_senior") or 1)
+                trigger = int(merged_params.get("trigger_if_novice_count_ge") or 1)
+                merged_params["min_senior"] = min_senior
+                merged_params["trigger_if_novice_count_ge"] = trigger
+                if min_senior <= 0 or trigger <= 0:
+                    issues.append(f"constraints[{idx}] ({name}) min_senior/trigger 必須大於 0。")
+            except Exception:
+                issues.append(f"constraints[{idx}] ({name}) 缺少有效的 min_senior/trigger。")
 
         constraints.append(
             RuleConstraint(

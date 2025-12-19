@@ -203,3 +203,413 @@
 * `dsl_runtime/solver_support.json`：op/fn solver_support 標註。
 * `dsl_samples/*.json`：常見規則範例，供 NL→DSL/回歸測試。
 
+---
+
+# 規格整理 v 1.1.3
+
+下面把「實務常見但目前 DSL 缺少/有限支援」補進 DSL v1.x 的擴充設計：**新增規則型態（HARD/SOFT）、語法、params、語意、以及 CP-SAT 編譯方式**。我會盡量用「可直接落地」的模板，讓你只要在 `ConstraintParamsDispatch / ObjectiveParamsDispatch` 與 `compile_constraints.py / compile_objectives.py` 增補對應分支就能上線。
+
+---
+
+## A. 週末休假頻率要求（每兩週至少一個完整週末休假）
+
+### A1. 新增 HARD Constraint：`min_full_weekends_off_in_window`
+
+**用途**：在任意（或以固定週期切分的）窗口內，要求「完整週末 OFF」的次數達到最低值。
+
+**DSL**
+
+```yaml
+constraints:
+  - id: "C_WEEKEND_OFF_FREQ"
+    name: min_full_weekends_off_in_window
+    params:
+      window_days: 14                # 14天窗口（兩週）
+      min_full_weekends_off: 1       # 至少1個完整週末OFF
+      weekend_def: "SAT_SUN"         # v1：固定SAT+SUN
+      off_code: "OFF"                # 可省略，用ctx判斷is_off
+      sliding: true                  # true=任意連續14天都要滿足；false=按period切塊
+```
+
+**語意**
+
+* 「完整週末 OFF」定義：週六與週日都 OFF。
+* `sliding=true`：任意連續 `window_days` 天內，完整週末 OFF 次數 ≥ min。
+* `sliding=false`：以 period 起點切成不重疊窗口（較寬鬆、較符合排班週期）。
+
+**CP-SAT 編譯（核心）**
+
+* 先對每位護理師 n、每個週末 w（週六日對）定義：
+
+  * `fullWeekendOff[n,w]` Bool
+  * 線性化：`fullWeekendOff <= offSat`, `fullWeekendOff <= offSun`, `fullWeekendOff >= offSat + offSun - 1`
+  * 其中 `offSat = x[n,sat,OFF]`，`offSun = x[n,sun,OFF]`
+* 再對窗口（sliding 或 block）加：
+
+  * `Σ fullWeekendOff[n,w in window] >= min_full_weekends_off`
+
+> 實作提示：需要 `calendar_index` 能找出每個週六對應的週日（跨月仍可）。
+
+---
+
+## B. 完整週末原則（要嘛整個週末上班，要嘛整個週末都休）
+
+### B1. 新增 HARD Constraint：`weekend_all_or_nothing`
+
+**用途**：避免只休週六但週日上班（或相反），要求週末兩天「同為 OFF 或同為 WORK」。
+
+**DSL**
+
+```yaml
+constraints:
+  - id: "C_WEEKEND_ALL_OR_NOTHING"
+    name: weekend_all_or_nothing
+    params:
+      weekend_def: "SAT_SUN"
+      mode: "OFF_OR_WORK"     # v1固定：兩天同態（都OFF或都工作）
+```
+
+**語意**
+
+* 對每位 n、每個週末（sat,sun）：
+
+  * `is_off(n,sat) == is_off(n,sun)`
+    等價：不允許 OFF/WORK 不一致。
+
+**CP-SAT**
+
+* `offSat = x[n,sat,OFF]`, `offSun = x[n,sun,OFF]`
+* 加 constraint：`offSat == offSun`
+
+> 變體（可擴充）：如果你想允許「兩天都同一班別類型」也可加 mode，但 v1 先做同 OFF/WORK 最常用。
+
+---
+
+## C. 最低連休天數（避免單日休假）
+
+### C1. 新增 HARD Constraint：`min_consecutive_off_days`
+
+**用途**：只要開始休假，就至少連休 K 天；避免 Work–OFF–Work 的單日休。
+
+**DSL**
+
+```yaml
+constraints:
+  - id: "C_MIN_CONSEC_OFF"
+    name: min_consecutive_off_days
+    params:
+      min_days: 2                 # 至少連休2天
+      apply_to: "ALL"             # v1 可保留
+      allow_at_period_edges: true # period頭尾若不足K天，是否放寬
+```
+
+**語意（常見實務）**
+
+* 若某天為 OFF 且前一天不是 OFF（休假區段開始），則後面 `min_days-1` 天必為 OFF。
+
+**CP-SAT（線性化）**
+
+* 定義 `off[n,d] = x[n,d,OFF]`
+* 定義 `startOff[n,d]`：當天是 OFF 且前一天非 OFF
+
+  * `startOff <= off[d]`
+  * `startOff <= 1 - off[d-1]`（d>0）
+  * `startOff >= off[d] - off[d-1]`
+* 對每個 startOff：
+
+  * `off[n,d+r] >= startOff[n,d]` for r=1..min_days-1
+* `allow_at_period_edges=true`：若 `d+r` 超出 period，則跳過該條（或改成 block 模式只檢查完整可檢窗口）。
+
+### C2. 新增 SOFT Objective：`penalize_single_off_day`
+
+**用途**：不強制，但盡量避免單日 OFF（更彈性）。
+
+**DSL**
+
+```yaml
+objectives:
+  - id: "O_AVOID_SINGLE_OFF"
+    name: penalize_single_off_day
+    weight: 10
+    params:
+      penalty: 1
+```
+
+**CP-SAT**
+
+* 對每 n,d（d-1,d,d+1 都存在）定義 `singleOff`：
+
+  * `singleOff = off[d] AND (1-off[d-1]) AND (1-off[d+1])`
+* cost += weight * penalty * singleOff
+
+---
+
+## D. 每週工時或班數上限（任意7天內最多工作5天等）
+
+> 你其實已經有 `max_assignments_in_window`，但要補齊兩個缺口：
+
+1. **週期滑動窗口**（任意 7 天）要成為一級規則（更常用、更清楚）
+2. **不同合約（全職/兼職）** 需 per-nurse params（或 job_level/contract_group）
+
+### D1. 新增 HARD Constraint：`max_work_days_in_rolling_window`
+
+**DSL**
+
+```yaml
+constraints:
+  - id: "C_MAX_5_IN_7"
+    name: max_work_days_in_rolling_window
+    params:
+      window_days: 7
+      max_work_days: 5
+      include_shifts: ["D","E","N"]   # 工作班別
+      sliding: true                   # 任意連續7天
+```
+
+**CP-SAT**
+
+* `work[n,d] = Σ_{s in include_shifts} x[n,d,s]`
+* 對每 n、每個 start：`Σ_{k=0..W-1} work[n,start+k] <= max_work_days`
+
+### D2. per-nurse / per-contract 變體（推薦做法）
+
+新增一種 params 形式（擇一）：
+
+**方式 1：rule 用 where + 多條規則**
+
+```yaml
+where: job_level(nurse) in {"PT"}     # 兼職群組（示例）
+params: { window_days: 7, max_work_days: 3, include_shifts: ["D","E","N"], sliding: true }
+```
+
+**方式 2：params 直接帶 mapping（更省 rule 數）**
+
+```yaml
+params:
+  window_days: 7
+  include_shifts: ["D","E","N"]
+  max_work_days_by_group:
+    FULLTIME: 5
+    PARTTIME: 3
+  nurse_group_field: "contract_type"
+```
+
+> v1 建議先用方式 1（簡單、少 parser 功能），方式 2 放 v1.2。
+
+---
+
+## E. 週末班分配公平（不是「盡量週末OFF」，而是公平）
+
+你已經有 `balance_weekend_work`（我前面 demo 補過），但你指出「目前 DSL 沒有明確內建」，所以這裡把它正式納入 **Objective 枚舉**，並補上兩種公平形式：**range** 與 **target-based**。
+
+### E1. 新增 SOFT Objective：`balance_weekend_shift_count`
+
+**DSL**
+
+```yaml
+objectives:
+  - id: "O_BAL_WEEKEND"
+    name: balance_weekend_shift_count
+    weight: 25
+    params:
+      weekend_days: "SAT_SUN"      # or "HOLIDAY"（擴充）
+      shifts: ["D","E","N"]        # 哪些算「週末班」
+      metric: "range"              # v1 建議 range (max-min)
+```
+
+**CP-SAT**
+
+* 計算每人週末工作次數 `cnt[n]`
+* 定義 `maxC/minC`，cost += (maxC - minC) * weight
+
+### E2. 目標值（target）變體（v1.2）
+
+```yaml
+metric: "target"
+target_per_nurse: 2
+penalty_per_diff: 1
+```
+
+* cost += |cnt[n] - target|（需要 abs 線性化）
+
+---
+
+## F. 新人與資深搭配（條件式規則）
+
+你已有 `skill_coverage`（每班至少一位具技能），但「新人在場 → 必有資深」是 **條件式**。補一條硬規則：
+
+### F1. 新增 HARD Constraint：`if_novice_present_then_senior_present`
+
+**DSL**
+
+```yaml
+constraints:
+  - id: "C_NOVICE_SENIOR_PAIR"
+    name: if_novice_present_then_senior_present
+    params:
+      department_id: "ICU"
+      shifts: ["D","E","N"]          # 哪些班適用
+      novice_group:                  # 新人定義（擇一）
+        by_job_levels: ["N1"]
+      senior_group:
+        by_job_levels: ["N3","N4"]
+      min_senior: 1
+      trigger_if_novice_count_ge: 1  # 只要有 >=1 新人就觸發
+```
+
+**語意**
+
+* 對每一天 d、每個 shift s：
+
+  * 若該班別有新人（>= trigger），則該班別資深數量 >= min_senior
+
+**CP-SAT（線性化）**
+
+* 定義：
+
+  * `novCnt[d,s] = Σ_{n in novice} x[n,d,s]`
+  * `senCnt[d,s] = Σ_{n in senior} x[n,d,s]`
+* 定義 trigger bool `t[d,s]`：`novCnt >= trigger`
+
+  * CP-SAT 可用 reified：`model.Add(novCnt >= trigger).OnlyEnforceIf(t)`
+  * 以及 `model.Add(novCnt < trigger).OnlyEnforceIf(t.Not())`
+* 再加：`model.Add(senCnt >= min_senior).OnlyEnforceIf(t)`
+
+> v1 若你要更簡單：直接要求每個班次 `senCnt >= 1`（不管新人在不在），但會太硬。建議用上述條件式。
+
+---
+
+## G. 避免同一護理師連續太多天排同一班別（輪班變化）
+
+### G1. 新增 HARD Constraint：`max_consecutive_same_shift`
+
+**DSL**
+
+```yaml
+constraints:
+  - id: "C_MAX_SAME_SHIFT"
+    name: max_consecutive_same_shift
+    params:
+      shift_codes: ["D","E","N"]     # OFF 通常不算
+      max_days: 3
+```
+
+**CP-SAT**
+
+* 對每 shift t ∈ shift_codes：
+
+  * `twork[n,d] = x[n,d,t]`
+  * 對每 n、每個 start：`Σ_{k=0..max_days} twork[n,start+k] <= max_days`
+    （禁止連續 max_days+1 天都是同一班）
+
+### G2. SOFT 版本（偏好輪替）
+
+`penalize_consecutive_same_shift`：每次連續超過 M 就加罰（v1 可先不做，硬規則較直觀）
+
+---
+
+## H. 跨科支援 / 輪調頻率限制（同人不同病房輪調太頻繁）
+
+這一類需要你排班變數不只決定 shift，還要決定 **department assignment**。目前你的核心變數是 `x[n,day,shift]`，如果你允許跨科支援，建議擴成：
+
+* `x[n,day,dept,shift] ∈ {0,1}`
+  且每日 sum(dept,shift)=1（或 dept + OFF 特判）
+
+> 如果 v1 暫不做跨科支援，就把這條列為 v1.2；但你要求先補 DSL 型態，我這裡給「可擴充語法」與編譯前置條件。
+
+### H1. 新增 HARD Constraint（v1.2 起）：`max_department_switches_in_window`
+
+**DSL**
+
+```yaml
+constraints:
+  - id: "C_DEPT_SWITCH_LIMIT"
+    name: max_department_switches_in_window
+    params:
+      window_days: 14
+      max_switches: 2
+      departments: ["ICU","ER"]         # 支援的輪調集合
+      count_off_as_no_dept: true
+```
+
+**語意**
+
+* 在任意 14 天內，某護理師「部門切換次數」不超過 2。
+
+**CP-SAT（需要 dept 變數）**
+
+* 定義 `deptOf[n,d]`（或 one-hot `y[n,d,dept]`）
+* 定義 `sw[n,d]` 表示 d-1 到 d 是否切換：
+
+  * `sw[n,d] >= y[n,d,dept] - y[n,d-1,dept]` 需要更完整線性化（one-hot switch 常用：`sw >= 1 - Σ_{dept} (y[d,dept] AND y[d-1,dept])`）
+* 窗口限制：`Σ sw <= max_switches`
+
+> v1 若你想暫不擴變數，可以把「跨科」視為技能/資格而不是 dept 維度，就不會有切換概念。
+
+---
+
+## I. DSL 擴充清單總表（新增 name）
+
+把你 DSL 的枚舉擴充如下：
+
+### I1. 新增 HARD constraints（name）
+
+* `min_full_weekends_off_in_window`
+* `weekend_all_or_nothing`
+* `min_consecutive_off_days`
+* `max_work_days_in_rolling_window`
+* `if_novice_present_then_senior_present`
+* `max_consecutive_same_shift`
+* （v1.2）`max_department_switches_in_window`（需要 dept 維度變數）
+
+### I2. 新增 SOFT objectives（name）
+
+* `penalize_single_off_day`
+* `balance_weekend_shift_count`（或 `balance_weekend_shift_count`/`balance_weekend_work` 統一命名其一）
+* `penalize_consecutive_same_shift`（可選）
+* （v1.2）`minimize_department_switches`（偏好少輪調）
+
+---
+
+## J. JSON Schema 與 Compiler 要改哪裡（最少改動）
+
+### J1. schema_v1.json
+
+* 在 `Constraint.name enum` 加上新 constraints
+* 在 `Objective.name enum` 加上新 objectives
+* 在 `ConstraintParamsDispatch` / `ObjectiveParamsDispatch` 追加對應 if/then params schema
+
+### J2. compile_constraints.py / compile_objectives.py
+
+* `compile_hard()` 加 switch case
+* `compile_soft()` 加 switch case
+* 增加 `weekend_pairs` 的工具函式（依 days 生成週末 sat->sun 的 index）
+
+---
+
+## K. 立即可用的 DSL 範例（把新規則用起來）
+
+### K1. 「兩週至少一個完整週末休」+「週末要嘛全休要嘛全上」+「至少連休2天」
+
+```yaml
+dsl_version: "1.0"
+id: "R_DEPT_WEEKEND_POLICY"
+name: "Weekend rest policy"
+scope: { type: DEPARTMENT, id: "ICU" }
+type: HARD
+priority: 90
+enabled: true
+constraints:
+  - id: "C1"
+    name: min_full_weekends_off_in_window
+    params: { window_days: 14, min_full_weekends_off: 1, weekend_def: "SAT_SUN", sliding: true }
+    message: "每14天至少有1個完整週末休假"
+  - id: "C2"
+    name: weekend_all_or_nothing
+    params: { weekend_def: "SAT_SUN", mode: "OFF_OR_WORK" }
+    message: "週末要嘛兩天都休，要嘛兩天都上班"
+  - id: "C3"
+    name: min_consecutive_off_days
+    params: { min_days: 2, allow_at_period_edges: true }
+    message: "休假至少連休2天"
+```
