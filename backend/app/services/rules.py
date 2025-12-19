@@ -14,9 +14,98 @@ from app.models.entities import Department, Nurse, Rule, RuleScopeType, RuleType
 logger = logging.getLogger(__name__)
 
 DEFAULT_DSL_VERSION = "sr-dsl/1.0"
-ALLOWED_DSL_VERSIONS = {DEFAULT_DSL_VERSION}
+ALLOWED_DSL_VERSIONS = {DEFAULT_DSL_VERSION, "sr-dsl/1.1", "sr-dsl/1.1.3"}
 WEIGHT_MIN = 1
 WEIGHT_MAX = 100
+SUPPORTED_OPERATORS = {
+    "AND",
+    "OR",
+    "NOT",
+    "XOR",
+    "IMPLIES",
+    "IFF",
+    "EQ",
+    "NE",
+    "GT",
+    "GTE",
+    "LT",
+    "LTE",
+    "IN",
+    "BETWEEN",
+    "ADD",
+    "SUB",
+    "MUL",
+    "DIV",
+    "MOD",
+    "ABS",
+    "MIN",
+    "MAX",
+    "CLAMP",
+    "ROUND",
+    "SET",
+    "UNION",
+    "INTERSECT",
+    "DIFF",
+    "SIZE",
+    "CONTAINS",
+    "DISTINCT",
+    "SORT",
+    "IF",
+    "COALESCE",
+    "IS_NULL",
+    "FORALL",
+    "EXISTS",
+    "COUNT_IF",
+    "SUM",
+    "MIN_OF",
+    "MAX_OF",
+    "CONCAT",
+    "LOWER",
+    "UPPER",
+    "MATCH",
+}
+SUPPORTED_FUNCTIONS = {
+    "shift_assigned",
+    "assigned_shift",
+    "is_work_shift",
+    "is_off_shift",
+    "in_dept",
+    "has_rank_at_least",
+    "employment_type_is",
+    "nurse_is_active",
+    "day_of_week",
+    "is_weekend",
+    "is_holiday",
+    "week_of_period",
+    "date_add",
+    "date_diff_days",
+    "count_consecutive_work_days",
+    "has_sequence",
+    "rest_minutes_between",
+    "coverage_count",
+    "required_coverage",
+    "coverage_shortage",
+    "count_shifts_in_period",
+    "count_weekend_shifts",
+    "deviation_from_mean",
+    "penalty_if",
+    "penalty_per_occurrence",
+    "reward_if",
+    "format_date",
+    "format_shift",
+    "lookup_nurse_name",
+    "explain_expr",
+}
+FORBIDDEN_SOLVER_FUNCTIONS = {
+    "MATCH",
+    "SORT",
+    "format_date",
+    "format_shift",
+    "lookup_nurse_name",
+    "explain_expr",
+    "assigned_shift",
+}
+SUPPORTED_DOMAIN_ITERS = {"NURSES", "DATES", "SHIFTS", "ASSIGNMENTS"}
 
 
 @dataclass
@@ -103,6 +192,110 @@ def _parse_scope(obj: dict, rule: Rule | None) -> tuple[RuleScopeType, Optional[
     return scope_type, scope_id, warnings
 
 
+def _validate_expr(expr: object, path: str, issues: list[str], warnings: list[str]) -> None:
+    if expr is None:
+        warnings.append(f"{path} 為 None，已忽略。")
+        return
+    if isinstance(expr, (bool, int, float, str)):
+        return
+    if isinstance(expr, list):
+        for idx, item in enumerate(expr):
+            _validate_expr(item, f"{path}[{idx}]", issues, warnings)
+        return
+    if not isinstance(expr, dict):
+        issues.append(f"{path} 必須為表達式（物件），取得 {type(expr).__name__}。")
+        return
+
+    if "op" in expr:
+        op = str(expr.get("op", "")).upper()
+        if not op:
+            issues.append(f"{path}.op 不得為空。")
+        elif op not in SUPPORTED_OPERATORS:
+            issues.append(f"{path} 未支援的 operator：{op}。")
+        args = expr.get("args")
+        if args is None:
+            issues.append(f"{path}.args 缺少運算元。")
+        elif not isinstance(args, list):
+            issues.append(f"{path}.args 必須為陣列。")
+        else:
+            for idx, arg in enumerate(args):
+                _validate_expr(arg, f"{path}.args[{idx}]", issues, warnings)
+        return
+
+    if "fn" in expr:
+        fn = str(expr.get("fn", "")).lower()
+        if not fn:
+            issues.append(f"{path}.fn 不得為空。")
+        elif fn not in SUPPORTED_FUNCTIONS:
+            issues.append(f"{path} 未支援的 function：{fn}。")
+        if fn in FORBIDDEN_SOLVER_FUNCTIONS:
+            warnings.append(f"{path} 使用 {fn} 僅供解釋/UI，不建議進 solver。")
+        args = expr.get("args")
+        if args is not None and not isinstance(args, dict):
+            issues.append(f"{path}.args 必須為物件。")
+        elif isinstance(args, dict):
+            for key, val in args.items():
+                _validate_expr(val, f"{path}.args.{key}", issues, warnings)
+        return
+
+    if "iter" in expr:
+        iter_val = str(expr.get("iter", "")).upper()
+        if iter_val not in SUPPORTED_DOMAIN_ITERS:
+            issues.append(f"{path}.iter 未支援的 iterator：{iter_val}。")
+        where_expr = expr.get("where")
+        if where_expr is not None:
+            _validate_expr(where_expr, f"{path}.where", issues, warnings)
+        return
+
+    if "lambda" in expr:
+        body_expr = expr.get("body")
+        _validate_expr(body_expr, f"{path}.body", issues, warnings)
+        return
+
+    # 未知物件型態
+    warnings.append(f"{path} 為未識別的表達式物件，請確認 DSL 規格。")
+
+
+def _validate_body(obj: dict, category: str, issues: list[str], warnings: list[str]) -> None:
+    body = obj.get("body")
+    if body is None:
+        return
+    if not isinstance(body, dict):
+        issues.append("body 必須為 object。")
+        return
+
+    body_type = str(body.get("type") or "").lower()
+    if not body_type:
+        warnings.append("body 缺少 type，預期為 constraint 或 objective。")
+    elif body_type not in {"constraint", "objective"}:
+        issues.append(f"body.type 僅支援 constraint|objective，取得 {body_type}。")
+
+    when_expr = body.get("when")
+    if when_expr is not None:
+        _validate_expr(when_expr, "body.when", issues, warnings)
+
+    assert_expr = body.get("assert")
+    if body_type == "constraint":
+        if assert_expr is None:
+            issues.append("body.type=constraint 必須提供 assert。")
+        else:
+            _validate_expr(assert_expr, "body.assert", issues, warnings)
+
+    penalty_expr = body.get("penalty")
+    reward_expr = body.get("reward")
+    if body_type == "objective":
+        if penalty_expr is None and reward_expr is None:
+            issues.append("body.type=objective 必須提供 penalty 或 reward。")
+        if penalty_expr is not None:
+            _validate_expr(penalty_expr, "body.penalty", issues, warnings)
+        if reward_expr is not None:
+            _validate_expr(reward_expr, "body.reward", issues, warnings)
+
+    weight_val = body.get("weight")
+    if category in ("soft", "preference") and weight_val is None:
+        warnings.append("軟性/偏好規則建議設定 weight，用於 penalty/reward 加權。")
+    if weight_val is not None and not isinstance(weight_val, (int, float)):
+        issues.append(f"body.weight 必須為數字，取得 {weight_val}。")
 def _extract_constraints_from_obj(
     obj: dict,
     *,
@@ -120,7 +313,7 @@ def _extract_constraints_from_obj(
     if isinstance(raw_constraints, dict):
         raw_constraints = [raw_constraints]
 
-    if not raw_constraints:
+    if not raw_constraints and "body" not in obj:
         issues.append("constraints 不得為空。")
         return constraints, issues, warnings
 
@@ -469,6 +662,8 @@ def validate_dsl(dsl_text: str, *, session: Session | None = None, rule: Rule | 
     )
     issues.extend(constraint_issues)
     warnings.extend(constraint_warnings)
+
+    _validate_body(obj, fallback_category, issues, warnings)
 
     # referential integrity checks
     shift_codes = _available_shift_codes(session)

@@ -25,6 +25,35 @@ def test_validate_dsl_failure_on_invalid_json():
     assert any("JSON" in issue for issue in result["issues"])
 
 
+def test_validate_dsl_body_expression_success():
+    dsl = json.dumps(
+        {
+            "dsl_version": "sr-dsl/1.0",
+            "category": "hard",
+            "body": {
+                "type": "constraint",
+                "assert": {"op": "AND", "args": [True, {"op": "NOT", "args": [False]}]},
+            },
+        }
+    )
+    result = rules.validate_dsl(dsl)
+    assert result["ok"] is True
+    assert not result["issues"]
+
+
+def test_validate_dsl_body_with_unsupported_operator():
+    dsl = json.dumps(
+        {
+            "dsl_version": "sr-dsl/1.0",
+            "category": "hard",
+            "body": {"type": "constraint", "assert": {"op": "POWER", "args": [1, 2]}},
+        }
+    )
+    result = rules.validate_dsl(dsl)
+    assert result["ok"] is False
+    assert any("未支援的 operator" in issue for issue in result["issues"])
+
+
 def test_stream_nl_to_dsl_events_uses_mock_when_no_key(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     events = list(rules.stream_nl_to_dsl_events("夜班後希望安排休假"))
