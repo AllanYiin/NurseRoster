@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from app.services import rules
-from app.models.entities import Department, Nurse, Project, Rule, RuleScopeType, RuleType
+from app.models.entities import Department, Nurse, Project, Rule, RuleScopeType, RuleType, ShiftCode
 
 
 def test_validate_dsl_success():
@@ -81,6 +81,50 @@ def test_dsl_to_nl_generates_human_text():
     assert "每天 D 班至少 2 人" in text
     assert "N 班連續不得超過 1 天" in text
     assert "大夜後偏好安排休假" in text
+
+
+def test_validate_dsl_scope_and_shift_reference_errors(test_context):
+    with test_context["make_session"]() as session:
+        dept = Department(code="ER", name="急診")
+        nurse = Nurse(staff_no="N002", name="林小華", department_code="ER", job_level_code="N1")
+        session.add(dept)
+        session.add(nurse)
+        session.add(ShiftCode(code="D", name="白班"))
+        session.commit()
+
+        dsl = json.dumps(
+            {
+                "dsl_version": "sr-dsl/1.0",
+                "scope": {"scope_type": "department", "scope_id": 999},
+                "constraints": [
+                    {"name": "daily_coverage", "shift": "X", "min": 2},
+                    {"name": "prefer_off_after_night", "shift": "N", "params": {"off_code": "Z"}},
+                ],
+            }
+        )
+
+        result = rules.validate_dsl(dsl, session=session)
+
+    assert result["ok"] is False
+    assert any("參照未知班別" in issue for issue in result["issues"])
+    assert any("科別不存在" in issue for issue in result["issues"])
+
+
+def test_validate_dsl_soft_body_warns_weight_and_forbidden_function():
+    dsl = json.dumps(
+        {
+            "dsl_version": "sr-dsl/1.0",
+            "category": "soft",
+            "body": {
+                "type": "objective",
+                "penalty": {"fn": "format_date", "args": {"date": "2024-01-01"}},
+            },
+        }
+    )
+    result = rules.validate_dsl(dsl)
+    assert result["ok"] is True
+    assert any("建議設定 weight" in warning for warning in result["warnings"])
+    assert any("僅供解釋/UI" in warning for warning in result["warnings"])
 
 
 def test_resolve_project_rules_overrides_and_conflicts(test_context):
