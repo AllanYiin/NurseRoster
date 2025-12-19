@@ -605,7 +605,7 @@ def dsl_to_nl(dsl_text: str) -> str:
     for c in constraints:
         label = name_map.get(c.name, c.name)
         params = c.params or {}
-        summary = f"{label}（params={params}）"
+        summary = f"{label}（{c.name}，params={params}）"
         if c.weight is not None:
             summary = f"{summary}，weight={c.weight}"
         parts.append(summary)
