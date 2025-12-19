@@ -208,6 +208,13 @@ function wireModal() {
 
 // ===== Calendar =====
 async function loadCalendar() {
+  const grid = $("#calendarGrid");
+  if (!state.project) {
+    if (grid) {
+      grid.innerHTML = `<div class="muted">目前沒有可用的專案資料，請先建立專案。</div>`;
+    }
+    return;
+  }
   const startEl = $("#calStart");
   const rangeEl = $("#calRange");
   const rangeMode = rangeEl?.value || "28";
@@ -246,7 +253,11 @@ async function loadCalendar() {
   const asgMap = new Map(assignments.map((a) => [key(a.nurse_staff_no, a.day), a]));
 
   // header
-  const grid = $("#calendarGrid");
+  if (!grid) return;
+  if (!nurses.length) {
+    grid.innerHTML = `<div class="muted">目前沒有護理師資料，請先到「資料維護」新增。</div>`;
+    return;
+  }
   let html = "";
   html += `<div class="calwrap">`;
   html += `<div class="cal" style="--day-count:${days.length}">`;
@@ -1347,8 +1358,8 @@ async function boot() {
       $("#conflictEnd").value = isoDate(pm[1]);
     }
   } catch (e) {
-    $("#projectPill").textContent = "專案載入失敗";
-    toast(`專案載入失敗：${e.message}`, "bad");
+    $("#projectPill").textContent = "尚無專案資料";
+    toast("目前沒有專案資料，請先建立專案。", "warn");
   }
 
   // initial view
