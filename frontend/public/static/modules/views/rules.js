@@ -485,6 +485,28 @@ function updateChatStatus(msg) {
   if (el) el.textContent = msg || "";
 }
 
+async function createRuleFromChat(nlText, dslText) {
+  if (!state.project?.id) return;
+  const title = (nlText || "").trim().slice(0, 30) || "規則";
+  try {
+    await api(`/api/rules?project_id=${state.project.id}`, {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        nl_text: nlText,
+        dsl_text: dslText,
+        is_enabled: true,
+      }),
+    });
+    await loadRules();
+    updateChatStatus("完成，已加入規則列表");
+    toast("已存成規則", "good");
+  } catch (err) {
+    updateChatStatus(`轉譯完成，但存規則失敗：${err.message}`);
+    toast(`存規則失敗：${err.message}`, "bad");
+  }
+}
+
 export function sendRuleChat() {
   const input = ($("#chatInput").value || "").trim();
   if (!input) return toast("請輸入想調整的規則描述", "warn");
@@ -506,8 +528,8 @@ export function sendRuleChat() {
       const finalText = dslText || buffer || "(未產生 DSL)";
       updateRuleChatMessage(placeholderId, finalText);
       setRuleChatScratch(finalText);
-      updateChatStatus("完成，可套用到底稿");
-      toast("已完成轉譯，請檢視右側底稿。", "good");
+      updateChatStatus("轉譯完成，正在存成規則...");
+      createRuleFromChat(input, finalText);
     },
     onError: (err) => {
       updateRuleChatMessage(placeholderId, `[失敗] ${err.message}`);
@@ -520,7 +542,12 @@ export function applyScratchToDsl(target) {
   const text = state.ruleChatScratch || "";
   if (!text) return toast("目前底稿為空，請先轉譯一段規則", "warn");
   if (target === "editor") {
-    $("#dslOutput").value = text;
+    const output = $("#dslOutput");
+    if (!output) {
+      toast("目前規則頁已移除 DSL 編輯器，請改用測試台", "warn");
+      return;
+    }
+    output.value = text;
     toast("已帶入 DSL 編輯器", "good");
   } else if (target === "tester") {
     $("#dslTester").value = text;
