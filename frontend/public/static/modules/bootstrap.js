@@ -37,34 +37,36 @@ export async function boot() {
     $("#calStart").dataset.manual = "1";
   });
 
-  $("#btnNlToDsl").addEventListener("click", runNlToDslStream);
-  $("#btnValidate").addEventListener("click", () => runValidateDsl().catch((e) => toast(`驗證失敗：${e.message}`, "bad")));
-  $("#btnDslToNl").addEventListener("click", () => runDslToNl().catch((e) => toast(`反向翻譯失敗：${e.message}`, "bad")));
-  $("#btnSaveRule").addEventListener("click", () => saveRuleFromPanel().catch((e) => toast(`儲存失敗：${e.message}`, "bad")));
-  $("#btnReloadRules").addEventListener("click", () => loadRules().catch((e) => toast(`載入失敗：${e.message}`, "bad")));
-  $("#btnApplyRuleFilter").addEventListener("click", () => {
+  $("#btnNlToDsl")?.addEventListener("click", runNlToDslStream);
+  $("#btnValidate")?.addEventListener("click", () => runValidateDsl().catch((e) => toast(`驗證失敗：${e.message}`, "bad")));
+  $("#btnDslToNl")?.addEventListener("click", () => runDslToNl().catch((e) => toast(`反向翻譯失敗：${e.message}`, "bad")));
+  $("#btnSaveRule")?.addEventListener("click", () => saveRuleFromPanel().catch((e) => toast(`儲存失敗：${e.message}`, "bad")));
+  $("#btnReloadRules")?.addEventListener("click", () => loadRules().catch((e) => toast(`載入失敗：${e.message}`, "bad")));
+  $("#btnApplyRuleFilter")?.addEventListener("click", () => {
     syncRuleFiltersFromUI();
     loadRules().catch((e) => toast(`載入失敗：${e.message}`, "bad"));
   });
-  $("#btnClearRuleFilter").addEventListener("click", () => {
+  $("#btnClearRuleFilter")?.addEventListener("click", () => {
     resetRuleFilters();
     loadRules().catch((e) => toast(`載入失敗：${e.message}`, "bad"));
   });
-  $("#ruleFilterQ").addEventListener("keydown", (e) => {
+  $("#ruleFilterQ")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       syncRuleFiltersFromUI();
       loadRules().catch((err) => toast(`載入失敗：${err.message}`, "bad"));
     }
   });
-  $("#btnChatSend").addEventListener("click", sendRuleChat);
-  $("#btnChatApplyToDsl").addEventListener("click", () => applyScratchToDsl("editor"));
-  $("#btnScratchToDsl").addEventListener("click", () => applyScratchToDsl("editor"));
-  $("#btnScratchToTester").addEventListener("click", () => {
+  $("#btnChatSend")?.addEventListener("click", sendRuleChat);
+  $("#btnChatApplyToDsl")?.addEventListener("click", () => {
     setView("dsl");
     applyScratchToDsl("tester");
   });
-  $("#btnReloadConflicts").addEventListener("click", () => loadRuleConflicts().catch((e) => toast(`衝突載入失敗：${e.message}`, "bad")));
-  $("#ruleChatScratch").addEventListener("input", (e) => {
+  $("#btnScratchToTester")?.addEventListener("click", () => {
+    setView("dsl");
+    applyScratchToDsl("tester");
+  });
+  $("#btnReloadConflicts")?.addEventListener("click", () => loadRuleConflicts().catch((e) => toast(`衝突載入失敗：${e.message}`, "bad")));
+  $("#ruleChatScratch")?.addEventListener("input", (e) => {
     state.ruleChatScratch = e.target.value;
   });
   renderRuleChatLog();
