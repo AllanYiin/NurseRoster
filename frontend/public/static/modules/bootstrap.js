@@ -91,6 +91,12 @@ export async function boot() {
   $("#btnDslLabDslToNl").addEventListener("click", () => runDslLabReverse().catch((e) => toast(`反向翻譯失敗：${e.message}`, "bad")));
   $("#btnDslLabValidate").addEventListener("click", () => runDslLabValidate().catch((e) => toast(`驗證失敗：${e.message}`, "bad")));
 
+  const toggleProjectNav = (enabled) => {
+    $$(".nav__item[data-requires-project]").forEach((btn) => {
+      btn.disabled = !enabled;
+    });
+  };
+
   try {
     state.project = await api("/api/projects/current");
     $("#projectPill").textContent = `專案：${state.project.name}（${state.project.month}）`;
@@ -99,10 +105,12 @@ export async function boot() {
       $("#conflictStart").value = isoDate(pm[0]);
       $("#conflictEnd").value = isoDate(pm[1]);
     }
+    toggleProjectNav(true);
   } catch (e) {
     $("#projectPill").textContent = "尚無專案資料";
     toast("目前沒有專案資料，請先建立專案。", "warn");
+    toggleProjectNav(false);
   }
 
-  setView("calendar");
+  setView(state.project?.id ? "calendar" : "no-project");
 }

@@ -18,22 +18,22 @@
       </div>
 
       <nav class="nav">
-        <button class="nav__item is-active" data-view="calendar">
+        <button class="nav__item is-active" data-view="calendar" data-requires-project="1">
           <span class="nav__label">排班總覽</span>
         </button>
-        <button class="nav__item" data-view="rules">
+        <button class="nav__item" data-view="rules" data-requires-project="1">
           <span class="nav__label">規則維護</span>
         </button>
-        <button class="nav__item" data-view="bundles">
+        <button class="nav__item" data-view="bundles" data-requires-project="1">
           <span class="nav__label">規則集精靈</span>
         </button>
-        <button class="nav__item" data-view="master">
+        <button class="nav__item" data-view="master" data-requires-project="1">
           <span class="nav__label">資料維護</span>
         </button>
-        <button class="nav__item" data-view="opt">
+        <button class="nav__item" data-view="opt" data-requires-project="1">
           <span class="nav__label">最佳化</span>
         </button>
-        <button class="nav__item" data-view="dsl">
+        <button class="nav__item" data-view="dsl" data-requires-project="1">
           <span class="nav__label">DSL 測試台</span>
         </button>
       </nav>
@@ -55,6 +55,21 @@
       </header>
 
       <section class="content">
+        <!-- No Project -->
+        <div class="view is-hidden" id="view-no-project">
+          <div class="card">
+            <div class="card__hd">
+              <div class="card__title">尚未載入專案</div>
+            </div>
+            <div class="card__bd">
+              <div class="empty-state">
+                <div class="empty-state__title">請先建立或載入專案</div>
+                <div class="muted">目前沒有專案資料，無法使用排班、規則或最佳化相關功能。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Calendar -->
         <div class="view" id="view-calendar">
           <div class="card">
