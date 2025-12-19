@@ -97,13 +97,28 @@ export async function boot() {
     })
   );
 
+  const toggleProjectNav = (enabled) => {
+    $$(".nav__item[data-requires-project]").forEach((btn) => {
+      btn.disabled = !enabled;
+    });
+  };
+
   try {
-    const project = await api("/api/projects/current");
-    setCurrentProject(project);
+
+    state.project = await api("/api/projects/current");
+    $("#projectPill").textContent = `專案：${state.project.name}（${state.project.month}）`;
+    const pm = projectMonthRange();
+    if (pm) {
+      $("#conflictStart").value = isoDate(pm[0]);
+      $("#conflictEnd").value = isoDate(pm[1]);
+    }
+    toggleProjectNav(true);
+
   } catch (e) {
     setCurrentProject(null);
     toast("目前沒有專案資料，請先建立專案。", "warn");
+    toggleProjectNav(false);
   }
 
-  setView("calendar");
+  setView(state.project?.id ? "calendar" : "no-project");
 }

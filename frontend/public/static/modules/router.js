@@ -9,11 +9,17 @@ import { initDslTester } from "./views/dsl.js";
 import { loadRuleBundleWizard } from "./views/rule_bundles.js";
 
 export function setView(view) {
+  const hasProject = !!state.project?.id;
+  if (!hasProject && view !== "no-project") {
+    view = "no-project";
+  }
+
   state.currentView = view;
   $$(".nav__item").forEach((b) => b.classList.toggle("is-active", b.dataset.view === view));
   $$(".view").forEach((v) => v.classList.toggle("is-hidden", v.id !== `view-${view}`));
 
   const titleMap = {
+    "no-project": ["尚未載入專案", "請先建立或載入專案後再使用功能"],
     calendar: ["排班總覽", "自訂日期範圍（週 / 28 天 / 月）"],
     rules: ["規則維護", "自然語言 ↔ DSL + 對話與衝突"],
     bundles: ["規則集精靈", "本期規則集快照（Rule Bundle Wizard）"],
