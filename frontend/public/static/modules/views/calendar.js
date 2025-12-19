@@ -5,13 +5,25 @@ import { toast } from "../toast.js";
 import { isoDate, addDays, endOfMonth, startOfWeek } from "../date.js";
 import { state } from "../state.js";
 import { openModal } from "../modal.js";
-import { projectMonthRange } from "../project.js";
+import { openProjectCreator, projectMonthRange } from "../project.js";
 
 export async function loadCalendar() {
   const grid = $("#calendarGrid");
   if (!state.project) {
     if (grid) {
-      grid.innerHTML = `<div class="muted">目前沒有可用的專案資料，請先建立專案。</div>`;
+      grid.innerHTML = `
+        <div class="empty">
+          <div class="muted">目前沒有可用的專案資料，請先建立專案。</div>
+          <button class="btn btn--primary" data-action="create-project">建立專案</button>
+        </div>
+      `;
+      grid.querySelector("[data-action='create-project']")?.addEventListener("click", () =>
+        openProjectCreator({
+          onCreated: async () => {
+            await loadCalendar();
+          },
+        })
+      );
     }
     return;
   }
