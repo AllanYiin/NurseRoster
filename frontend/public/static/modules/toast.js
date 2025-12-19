@@ -13,5 +13,5 @@ export function toast(msg, kind = "info") {
   if (kind === "bad") el.classList.add("bad");
   el.classList.add("show");
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => el.classList.remove("show"), 2400);
+  toast._t = setTimeout(() => el.classList.remove("show"), 4500);
 }

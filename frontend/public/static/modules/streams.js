@@ -1,6 +1,8 @@
+import { apiUrl } from "./api.js";
+
 export function streamNlToDsl(text, handlers = {}) {
   const { onStatus, onToken, onCompleted, onError } = handlers;
-  const url = `/api/rules/nl_to_dsl_stream?text=${encodeURIComponent(text || "")}`;
+  const url = apiUrl(`/api/rules/nl_to_dsl_stream?text=${encodeURIComponent(text || "")}`);
   const es = new EventSource(url);
   let closed = false;
 
@@ -45,7 +47,7 @@ export function streamNlToDsl(text, handlers = {}) {
 
 export async function streamRuleVersionFromNl(ruleId, text, handlers = {}) {
   const { onDraft, onStatus, onToken, onCompleted, onValidated, onError, signal } = handlers;
-  const res = await fetch(`/api/rules/${ruleId}/versions:from_nl`, {
+  const res = await fetch(apiUrl(`/api/rules/${ruleId}/versions:from_nl`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),

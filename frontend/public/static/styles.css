@@ -129,7 +129,7 @@ body{
 .iconbtn{border:1px solid var(--border); background:#fff; width:34px; height:34px; border-radius:12px; cursor:pointer}
 
 /* Toast */
-#toast{position:fixed; right:16px; bottom:16px; padding:10px 12px; border-radius:14px; border:1px solid var(--border); background:#fff; box-shadow:var(--shadow); opacity:0; transform:translateY(8px); transition:all .18s ease; max-width:min(520px, calc(100vw - 32px)); z-index:9999}
+#toast{position:fixed; right:16px; bottom:16px; padding:10px 12px; border-radius:14px; border:1px solid var(--border); background:#fff; box-shadow:var(--shadow); opacity:0; transform:translateY(8px); transition:all .18s ease; max-width:min(520px, calc(100vw - 32px)); z-index:9999; user-select:text; cursor:text}
 #toast.show{opacity:1; transform:translateY(0)}
 #toast.good{border-color:rgba(16,185,129,0.4)}
 #toast.warn{border-color:rgba(245,158,11,0.5)}
@@ -230,7 +230,7 @@ pre{white-space:pre-wrap; word-break:break-word; margin:0}
 }
 
 /* Toast */
-#toast{position:fixed; right:18px; bottom:18px; z-index:9999; opacity:0; transform:translateY(8px); transition:all .2s ease; background:#111827; color:#fff; padding:10px 12px; border-radius:14px; max-width:min(420px, calc(100vw - 36px)); box-shadow: var(--shadow)}
+#toast{position:fixed; right:18px; bottom:18px; z-index:9999; opacity:0; transform:translateY(8px); transition:all .2s ease; background:#111827; color:#fff; padding:10px 12px; border-radius:14px; max-width:min(420px, calc(100vw - 36px)); box-shadow: var(--shadow); user-select:text; cursor:text}
 #toast.show{opacity:1; transform:translateY(0)}
 #toast.good{background:#065f46}
 #toast.warn{background:#92400e}

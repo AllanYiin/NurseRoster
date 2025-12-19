@@ -1,5 +1,22 @@
+const apiBase = (() => {
+  const explicit = window.__API_BASE__ && String(window.__API_BASE__).trim();
+  if (explicit) return explicit;
+  const meta = document.querySelector('meta[name="api-base"]');
+  return meta?.content?.trim() || "";
+})();
+
+export function apiUrl(path) {
+  if (!apiBase) return path;
+  if (/^https?:\/\//i.test(path)) return path;
+  try {
+    return new URL(path, apiBase).toString();
+  } catch {
+    return path;
+  }
+}
+
 export async function api(path, opts = {}) {
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
