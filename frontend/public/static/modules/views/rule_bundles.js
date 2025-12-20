@@ -82,12 +82,14 @@ async function loadHospitalRules() {
   const hospitalId = Number($("#wizardHospitalId")?.value) || null;
   if (!hospitalId) {
     $("#wizardHospitalRules").innerHTML = `<div class="muted">請先輸入院區 ID。</div>`;
+    $("#wizardHospitalImportStatus").textContent = "尚未匯入預設規則";
     return;
   }
   const rules = await api(`/api/rules?project_id=${state.project.id}&scope_type=HOSPITAL&scope_id=${hospitalId}&type=HARD`);
   if (!state.ruleBundleWizard.hospitalRuleIds.length) {
     state.ruleBundleWizard.hospitalRuleIds = rules.map((r) => r.id);
   }
+  $("#wizardHospitalImportStatus").textContent = rules.length ? `已載入 ${rules.length} 條規則` : "尚未匯入預設規則";
   renderRuleList("#wizardHospitalRules", rules, state.ruleBundleWizard.hospitalRuleIds);
   $("#wizardHospitalRules")?.querySelectorAll("input[type=checkbox]").forEach((cb) => {
     cb.addEventListener("change", (e) => {
@@ -95,6 +97,21 @@ async function loadHospitalRules() {
       state.ruleBundleWizard.hospitalRuleIds = toggleSelected(state.ruleBundleWizard.hospitalRuleIds, id, e.target.checked);
     });
   });
+}
+
+async function importHospitalHardRules() {
+  if (!state.project?.id) return;
+  const hospitalId = Number($("#wizardHospitalId")?.value) || null;
+  if (!hospitalId) return toast("請先輸入院區 ID", "warn");
+  const payload = { hospital_id: hospitalId };
+  const created = await api(`/api/rules:seed-hospital-hard?project_id=${state.project.id}`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  $("#wizardHospitalImportStatus").textContent = created.length ? `已匯入 ${created.length} 條規則` : "已匯入（無新增規則）";
+  state.ruleBundleWizard.hospitalRuleIds = [];
+  await loadHospitalRules();
+  toast("已匯入醫院硬規則", "good");
 }
 
 async function loadTemplates() {
@@ -332,6 +349,7 @@ export async function loadRuleBundleWizard() {
 
     $("#wizardCreatePeriod").addEventListener("click", () => createPeriod().catch((e) => toast(`建立失敗：${e.message}`, "bad")));
     $("#wizardHospitalId").addEventListener("change", () => loadHospitalRules().catch((e) => toast(`載入失敗：${e.message}`, "bad")));
+    $("#wizardImportHospitalHardRules").addEventListener("click", () => importHospitalHardRules().catch((e) => toast(`匯入失敗：${e.message}`, "bad")));
     $("#wizardTemplateReload").addEventListener("click", () => loadTemplates().catch((e) => toast(`載入失敗：${e.message}`, "bad")));
     $("#wizardTemplateSelect").addEventListener("change", () => loadTemplateRules().catch((e) => toast(`載入失敗：${e.message}`, "bad")));
     $("#wizardTemplateSaveRules").addEventListener("click", () => saveTemplateRules().catch((e) => toast(`儲存失敗：${e.message}`, "bad")));

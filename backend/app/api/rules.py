@@ -23,6 +23,7 @@ from app.services.rules import (
     stream_nl_to_dsl_events,
     is_law_dsl,
 )
+from app.services.hospital_rules import ensure_hospital_hard_rules
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 logger = logging.getLogger(__name__)
@@ -39,6 +40,10 @@ class RuleVersionFromDsl(BaseModel):
     dsl_text: str
     nl_text: str = ""
     reverse_translation: str | None = None
+
+
+class HospitalRulesSeed(BaseModel):
+    hospital_id: int
 
 
 def _ensure_rule(session: Session, rule_id: int) -> Rule:
@@ -98,6 +103,14 @@ def create_rule(project_id: int, payload: RuleUpsert, s: Session = Depends(db_se
     s.commit()
     s.refresh(r)
     return ok(r.model_dump())
+
+
+@router.post(":seed-hospital-hard", response_model=None)
+def seed_hospital_hard_rules(project_id: int, payload: HospitalRulesSeed, s: Session = Depends(db_session)):
+    if not payload.hospital_id:
+        raise HTTPException(status_code=400, detail="hospital_id 不可為空")
+    created = ensure_hospital_hard_rules(s, project_id, payload.hospital_id)
+    return ok([r.model_dump() for r in created])
 
 
 @router.put("/{rule_id}", response_model=None)
