@@ -1,0 +1,206 @@
+version: 1
+rules:
+  - key: hospital_hard_001
+    title: "夜班後隔日必休（硬性）"
+    scope_type: HOSPITAL
+    rule_type: HARD
+    priority: 8901
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "R_HOSPITAL_001"
+      name: "夜班後隔日必休（硬性）"
+      scope:
+        type: HOSPITAL
+        id: "{hospital_id}"
+      type: HARD
+      priority: 8901
+      enabled: true
+      tags: ["hospital_hard", "fatigue", "night"]
+      notes: "院內硬規：夜班後隔天必須安排 OFF。"
+      constraints:
+        - id: "C1"
+          name: rest_after_night
+          params: {}
+          message: "夜班後隔日必須為 OFF"
+  - key: hospital_hard_010
+    title: "最大連續夜班天數（硬性）"
+    scope_type: HOSPITAL
+    rule_type: HARD
+    priority: 8890
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "R_HOSPITAL_010"
+      name: "最大連續夜班天數（硬性）"
+      scope:
+        type: HOSPITAL
+        id: "{hospital_id}"
+      type: HARD
+      priority: 8890
+      enabled: true
+      tags: ["hospital_hard", "night", "consecutive"]
+      notes: "院內硬規：夜班不可連續超過 2 天。"
+      constraints:
+        - id: "C1"
+          name: max_consecutive
+          params:
+            shift: "N"
+            max_days: 2
+          message: "夜班連續不得超過 2 天"
+  - key: hospital_hard_020
+    title: "最低連休天數（硬性）"
+    scope_type: HOSPITAL
+    rule_type: HARD
+    priority: 8880
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "R_HOSPITAL_020"
+      name: "最低連休天數（硬性）"
+      scope:
+        type: HOSPITAL
+        id: "{hospital_id}"
+      type: HARD
+      priority: 8880
+      enabled: true
+      tags: ["hospital_hard", "off", "consecutive"]
+      notes: "院內硬規：休假一旦開始，至少連休 2 天（可允許期初期末例外）。"
+      constraints:
+        - id: "C1"
+          name: min_consecutive_off_days
+          params:
+            min_days: 2
+            allow_at_period_edges: true
+            off_code: "OFF"
+          message: "連休至少 2 天"
+  - key: hospital_hard_030
+    title: "7 日窗口最多工作天數（硬性）"
+    scope_type: HOSPITAL
+    rule_type: HARD
+    priority: 8870
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "R_HOSPITAL_030"
+      name: "7 日窗口最多工作天數（硬性）"
+      scope:
+        type: HOSPITAL
+        id: "{hospital_id}"
+      type: HARD
+      priority: 8870
+      enabled: true
+      tags: ["hospital_hard", "window", "workdays"]
+      notes: "院內硬規：任意連續 7 天最多工作 6 天（至少 1 天 OFF）。"
+      constraints:
+        - id: "C1"
+          name: max_work_days_in_rolling_window
+          params:
+            window_days: 7
+            max_work_days: 6
+            include_shifts: []
+            sliding: true
+          message: "任意 7 天內最多工作 6 天"
+  - key: hospital_hard_031
+    title: "14 日窗口最多工作天數（硬性）"
+    scope_type: HOSPITAL
+    rule_type: HARD
+    priority: 8865
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "R_HOSPITAL_031"
+      name: "14 日窗口最多工作天數（硬性）"
+      scope:
+        type: HOSPITAL
+        id: "{hospital_id}"
+      type: HARD
+      priority: 8865
+      enabled: true
+      tags: ["hospital_hard", "window", "workdays"]
+      notes: "院內硬規：任意連續 14 天最多工作 11 天（避免長期超載）。"
+      constraints:
+        - id: "C1"
+          name: max_work_days_in_rolling_window
+          params:
+            window_days: 14
+            max_work_days: 11
+            include_shifts: []
+            sliding: true
+          message: "任意 14 天內最多工作 11 天"
+  - key: hospital_hard_040
+    title: "週末全休或全上（硬性）"
+    scope_type: HOSPITAL
+    rule_type: HARD
+    priority: 8850
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "R_HOSPITAL_040"
+      name: "週末全休或全上（硬性）"
+      scope:
+        type: HOSPITAL
+        id: "{hospital_id}"
+      type: HARD
+      priority: 8850
+      enabled: true
+      tags: ["hospital_hard", "weekend"]
+      notes: "院內硬規：週末休假必須兩天連休；若上班則兩天都可排班。"
+      constraints:
+        - id: "C1"
+          name: weekend_all_or_nothing
+          params:
+            weekend_def: "SAT_SUN"
+            off_code: "OFF"
+          message: "週末必須全休或全上（OFF 需成對）"
+  - key: hospital_hard_041
+    title: "28 日窗口最少完整週末休假次數（硬性）"
+    scope_type: HOSPITAL
+    rule_type: HARD
+    priority: 8840
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "R_HOSPITAL_041"
+      name: "28 日窗口最少完整週末休假次數（硬性）"
+      scope:
+        type: HOSPITAL
+        id: "{hospital_id}"
+      type: HARD
+      priority: 8840
+      enabled: true
+      tags: ["hospital_hard", "weekend", "window"]
+      notes: "院內硬規：每 28 天至少 2 次『完整週末（六日）』OFF。"
+      constraints:
+        - id: "C1"
+          name: min_full_weekends_off_in_window
+          params:
+            window_days: 28
+            min_full_weekends_off: 2
+            weekend_def: "SAT_SUN"
+            off_code: "OFF"
+            sliding: true
+          message: "每 28 天至少 2 次完整週末休"
+  - key: hospital_hard_050
+    title: "新手在場需資深在場（硬性）"
+    scope_type: HOSPITAL
+    rule_type: HARD
+    priority: 8830
+    dsl_template: |
+      dsl_version: "1.0"
+      id: "R_HOSPITAL_050"
+      name: "新手在場需資深在場（硬性）"
+      scope:
+        type: HOSPITAL
+        id: "{hospital_id}"
+      type: HARD
+      priority: 8830
+      enabled: true
+      tags: ["hospital_hard", "staffing", "seniority"]
+      notes: "院內硬規：當同班別出現新手（例如 N1/N2）時，至少要有 1 名資深（例如 N3/N4）同班。"
+      constraints:
+        - id: "C1"
+          name: if_novice_present_then_senior_present
+          params:
+            shifts: ["D", "E", "N"]
+            department_id: ""
+            novice_group:
+              by_job_levels: ["N1", "N2"]
+            senior_group:
+              by_job_levels: ["N3", "N4"]
+            trigger_if_novice_count_ge: 1
+            min_senior: 1
+          message: "新手在場需至少 1 名資深同班"
